@@ -12,7 +12,7 @@ import { Client } from './client';
 import type { ChatRequest } from './types';
 import { type MinimalSanitizeConfig, ErrHistoryTooDeep, sanitize, stripEphemeral } from './sanitize';
 
-declare module './client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /**
      * 配置请求前的底线防御 (体积 / deny-list / 深度)。

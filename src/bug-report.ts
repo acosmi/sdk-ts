@@ -44,7 +44,7 @@ export interface BugView {
   extras?: Record<string, unknown>;
 }
 
-declare module './client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /**
      * 上报一份 CrabCode bug 报告.

@@ -35,7 +35,7 @@ interface WSStateImpl {
   connected: boolean;
 }
 
-declare module './client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /**
      * 建立 WebSocket 长连接 — 等待首次连接成功或 abort。
