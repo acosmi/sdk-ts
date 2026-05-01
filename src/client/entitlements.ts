@@ -15,7 +15,7 @@ import type {
 import { Client } from '../client';
 import { coefCacheTTLMs } from '../client-helpers';
 
-declare module '../client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /** 查询当前用户的权益余额 (聚合) */
     getBalance(signal?: AbortSignal): Promise<EntitlementBalance>;

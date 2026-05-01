@@ -18,7 +18,11 @@
     "resolveJsonModule": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@acosmi/sdk-ts": ["./src/client.ts"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test/**", "**/*.test.ts"]

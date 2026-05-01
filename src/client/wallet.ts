@@ -3,7 +3,7 @@
 import type { APIResponse, Transaction, WalletStats } from '../types';
 import { Client } from '../client';
 
-declare module '../client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /** 获取钱包统计 (余额/月消费/月充值) */
     getWalletStats(signal?: AbortSignal): Promise<WalletStats>;

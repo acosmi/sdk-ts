@@ -24,7 +24,7 @@ import {
   readLimitedText,
 } from '../client-helpers';
 
-declare module '../client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /** 浏览技能商店 (公共端点, 无需认证) */
     browseSkillStore(query: SkillStoreQuery, signal?: AbortSignal): Promise<SkillStoreItem[]>;

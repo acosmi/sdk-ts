@@ -9,7 +9,7 @@ import type {
 } from '../types';
 import { Client } from '../client';
 
-declare module '../client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /** 分页查询通知列表 */
     listNotifications(

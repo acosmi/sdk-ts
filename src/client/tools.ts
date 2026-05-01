@@ -3,7 +3,7 @@
 import type { APIResponse, ToolListResponse, ToolView } from '../types';
 import { Client } from '../client';
 
-declare module '../client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /** 获取当前用户租户下的所有工具 (Skill 优先 + Plugin 兜底) */
     listTools(signal?: AbortSignal): Promise<ToolView[]>;

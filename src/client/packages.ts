@@ -12,7 +12,7 @@ import { OrderTerminalError } from '../types';
 import { Client } from '../client';
 import { isOrderSuccess, isOrderTerminal } from '../client-helpers';
 
-declare module '../client' {
+declare module '@acosmi/sdk-ts' {
   interface Client {
     /** 获取商城流量包列表 (兼容 yudao 分页和直接数组两种格式) */
     listTokenPackages(signal?: AbortSignal): Promise<TokenPackage[]>;
