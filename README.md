@@ -242,6 +242,15 @@ npm test
 npm run build
 ```
 
+## 更新历史
+
+完整变更日志见 [CHANGELOG.md](./CHANGELOG.md)。
+
+| 版本 | 状态 | 概要 |
+| --- | --- | --- |
+| 1.0.1 | 当前稳定版 | 修复 1.0.0 双层 broken packaging:tsup 输出 `.mjs+.cjs` 与 exports 字段对齐;9 处 `declare module` 绑包名 `@acosmi/sdk-ts` 让 d.ts augmentation 在 consumer 视角合并;prepublishOnly 加 packed-tarball 烟测拦截"源码过 / 打包后 broken"。 |
+| 1.0.0 | **deprecated** | 双层 broken:(1) `package.json.exports` 8 处 `.mjs` 引用与 tsup 默认 `.js+.cjs` 错位 → bun/Node ESM `Cannot find module`;(2) 9 处 `declare module` 用相对路径,consumer 视角断链 → 50+ 方法 TS2339。`npm install @acosmi/sdk-ts` 自动跳到 1.0.1。 |
+
 ## License
 
 [MIT](./LICENSE) — Copyright (c) 2026 Acosmi
