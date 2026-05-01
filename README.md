@@ -7,7 +7,7 @@
 ## 状态
 
 - 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
-- 当前版本：1.0.0（稳定测试版，与 Go SDK 联动 1.0.x）
+- 当前版本：1.0.1（稳定测试版，与 Go SDK 联动 1.0.x；1.0.0 已 deprecate due to broken packaging，详见 CHANGELOG）
 - 测试：36/36 vitest 全绿，typecheck/lint/build 0 错误
 
 ## 安装
