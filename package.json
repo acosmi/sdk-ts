@@ -62,11 +62,11 @@
   "author": "Acosmi",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Acosmi/acosmi-sdk-ts.git"
+    "url": "git+https://github.com/acosmi/acosmi-sdk-ts.git"
   },
-  "homepage": "https://github.com/Acosmi/acosmi-sdk-ts#readme",
+  "homepage": "https://github.com/acosmi/acosmi-sdk-ts#readme",
   "bugs": {
-    "url": "https://github.com/Acosmi/acosmi-sdk-ts/issues"
+    "url": "https://github.com/acosmi/acosmi-sdk-ts/issues"
   },
   "publishConfig": {
     "access": "public"

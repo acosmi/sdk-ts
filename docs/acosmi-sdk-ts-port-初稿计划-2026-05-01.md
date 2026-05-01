@@ -120,8 +120,8 @@ Go SDK `acosmi-sdk-go/` 即将发布 v1.0.0 正式版（当前 v0.19.0，2026-04
 
 ```
 Chat-Acosmi/
-├── acosmi-sdk-go/     ← 现有，subtree → Acosmi/acosmi-sdk-go
-└── acosmi-sdk-ts/     ← 新建（本档所在），subtree → Acosmi/acosmi-sdk-ts
+├── acosmi-sdk-go/     ← 现有，subtree → acosmi/acosmi-sdk-go
+└── acosmi-sdk-ts/     ← 新建（本档所在），subtree → acosmi/acosmi-sdk-ts
 ```
 
 - 包名：建议 `@acosmi/sdk`（**待你拍**）
