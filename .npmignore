@@ -1,0 +1,14 @@
+src/
+test/
+docs/
+node_modules/
+*.config.ts
+*.config.cjs
+*.config.mjs
+.eslintrc*
+.prettierrc*
+tsconfig.json
+.github/
+.vscode/
+*.log
+.env*
