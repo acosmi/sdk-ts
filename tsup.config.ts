@@ -22,6 +22,7 @@ export default defineConfig([
     target: 'node18',
     splitting: false,
     treeshake: true,
+    outExtension: ({ format }) => ({ js: format === 'esm' ? '.mjs' : '.cjs' }),
   },
   {
     entry: { index: 'src/browser.ts' },
@@ -34,6 +35,7 @@ export default defineConfig([
     splitting: false,
     treeshake: true,
     platform: 'browser',
+    outExtension: ({ format }) => ({ js: format === 'esm' ? '.mjs' : '.cjs' }),
   },
   {
     entry: { index: 'src/index.ts' },
@@ -45,5 +47,6 @@ export default defineConfig([
     target: 'es2022',
     splitting: false,
     treeshake: true,
+    outExtension: ({ format }) => ({ js: format === 'esm' ? '.mjs' : '.cjs' }),
   },
 ]);
