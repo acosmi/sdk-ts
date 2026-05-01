@@ -1,25 +1,25 @@
-# acosmi-sdk-ts
+# @acosmi/sdk-ts
 
 > Acosmi 模型网关 TypeScript SDK — 双格式（Anthropic + OpenAI）多端（浏览器 / Node ≥18 / Deno / Bun）
 
-[![npm](https://img.shields.io/npm/v/acosmi-sdk-ts.svg)](https://www.npmjs.com/package/acosmi-sdk-ts)
+[![npm](https://img.shields.io/npm/v/%40acosmi%2Fsdk-ts.svg)](https://www.npmjs.com/package/@acosmi/sdk-ts)
 
 ## 状态
 
-- 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v0.19.0（bug-for-bug 对齐）
-- 当前版本：1.0.0（稳定测试版，与 Go SDK 解耦独立演进）
+- 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
+- 当前版本：1.0.0（稳定测试版，与 Go SDK 联动 1.0.x）
 - 测试：36/36 vitest 全绿，typecheck/lint/build 0 错误
 
 ## 安装
 
 ```sh
-npm install acosmi-sdk-ts
+npm install @acosmi/sdk-ts
 ```
 
 ## 快速开始
 
 ```ts
-import { Client, allScopes } from 'acosmi-sdk-ts';
+import { Client, allScopes } from '@acosmi/sdk-ts';
 
 const client = new Client({ serverURL: 'https://acosmi.com' });
 await client.login('My App', allScopes());
@@ -89,7 +89,7 @@ const token = await client.ensureToken();      // 拿到当前有效 access toke
 ### 手动 OAuth（CLI / 自定义流程）
 
 ```ts
-import { discover, register, authorize, exchangeCode } from 'acosmi-sdk-ts';
+import { discover, register, authorize, exchangeCode } from '@acosmi/sdk-ts';
 
 const meta = await discover('https://acosmi.com');
 const reg = await register(meta, 'My CLI', allScopes());
@@ -102,7 +102,7 @@ const tokens = await exchangeCode(meta, reg, result.code, result.codeVerifier);
 ### Token 持久化
 
 ```ts
-import { Client, FileTokenStore, LocalStorageTokenStore } from 'acosmi-sdk-ts';
+import { Client, FileTokenStore, LocalStorageTokenStore } from '@acosmi/sdk-ts';
 
 // Node — 默认 ~/.acosmi/tokens.json，可自定义路径
 const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new FileTokenStore('./my-tokens.json') });
@@ -131,7 +131,7 @@ const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new Fil
 ### 示例：Skill 商店搜索
 
 ```ts
-import { Client } from 'acosmi-sdk-ts';
+import { Client } from '@acosmi/sdk-ts';
 
 const client = new Client({ serverURL: 'https://acosmi.com' });
 
@@ -149,7 +149,7 @@ console.log(result.total, result.items);
 ### 示例：LLM 联网搜索（Anthropic Web Search Tool）
 
 ```ts
-import { Client, newWebSearchTool } from 'acosmi-sdk-ts';
+import { Client, newWebSearchTool } from '@acosmi/sdk-ts';
 
 const tool = newWebSearchTool({
   max_uses: 5,
@@ -210,7 +210,7 @@ const view = await client.getBugReport(result.feedback_id);
 | `OrderTerminalError` | `waitForPayment` 终态失败                    |
 
 ```ts
-import { HTTPError, BusinessError } from 'acosmi-sdk-ts';
+import { HTTPError, BusinessError } from '@acosmi/sdk-ts';
 
 try {
   await client.chat(...);
