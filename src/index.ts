@@ -74,6 +74,10 @@ export * as sanitize from './sanitize';
 // === Stream meta ===
 export { extractAnthropicBlockMeta, type BlockMeta } from './stream-meta';
 
+// === Agent Runs ===
+export * from './agent-runs-types';
+export { AgentRunsClient } from './client/agent-runs';
+
 // === Betas ===
 export { buildBetas, uniqueMerge } from './betas';
 
@@ -98,6 +102,7 @@ import './client/wallet';
 import './client/skills';
 import './client/tools';
 import './client/notifications';
+import './client/agent-runs';
 import './sanitize-bridge';
 import './ws';
 import './bug-report';

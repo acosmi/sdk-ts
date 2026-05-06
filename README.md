@@ -1,15 +1,15 @@
 # @acosmi/sdk-ts
 
-> Acosmi 模型网关 TypeScript SDK — 双格式（Anthropic + OpenAI）多端（浏览器 / Node ≥18 / Deno / Bun）
+> Acosmi 模型网关 + Agent Run Gateway TypeScript SDK — 双格式（Anthropic + OpenAI）多端（浏览器 / Node ≥18 / Deno / Bun）
 
 [![npm](https://img.shields.io/npm/v/%40acosmi%2Fsdk-ts.svg)](https://www.npmjs.com/package/@acosmi/sdk-ts)
 
 ## 状态
 
 - 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
-- 当前版本：**1.0.1**（稳定测试版，与 Go SDK 联动 1.0.x；1.0.0 已 deprecate due to broken packaging，详见 [CHANGELOG](./CHANGELOG.md)）
-- 测试：36/36 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
-- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.0.1) · [tarball](https://registry.npmjs.org/@acosmi/sdk-ts/-/sdk-ts-1.0.1.tgz) · [GitHub Release](https://github.com/acosmi/sdk-ts/releases/tag/v1.0.1) · [provenance](https://registry.npmjs.org/-/npm/v1/attestations/@acosmi%2fsdk-ts@1.0.1)（SLSA v1，CI 自动签）
+- 当前版本：**1.1.0**（新增 SDK-facing Agent Runs 公开 API；详见 [CHANGELOG](./CHANGELOG.md)）
+- 测试：55/55 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
+- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.1.0) · [tarball](https://registry.npmjs.org/@acosmi/sdk-ts/-/sdk-ts-1.1.0.tgz) · [GitHub Release](https://github.com/acosmi/sdk-ts/releases/tag/v1.1.0)
 
 ## 安装
 
@@ -78,6 +78,69 @@ for await (const ev of stream) {
 
 `chatStreamWithUsage()` 返回带 usage/error/sources 标签的 AsyncIterable，便于聚合统计（详见 `src/client.ts`）。
 
+## Agent Runs
+
+`client.agentRuns` 是下游产品接入 Acosmi 云端智能体循环的正式 SDK 边界。CrabDesign、CrabCode、CrabClaw 等产品应通过这里创建、流式消费、取消、查询和下载智能体任务，不要直连 Nexus 内部 `/api/v4/chat/completions`。
+
+服务端 Agent Run Gateway 会按认证上下文做 `tenantId + userId` 隔离，run 状态、SSE event、artifact 和 local tool result 都是 durable store；任务执行会进入 Acosmi 统一 entitlement 预扣/结算/释放链路。结算只使用 provider/ADK 透传的精确 usage；如果 provider 未返回 `exact: true` usage，服务端会释放 hold，不会使用估算 token 扣费。
+
+```ts
+import { Client, allScopes } from '@acosmi/sdk-ts';
+
+const client = new Client({ serverURL: 'https://acosmi.com' });
+await client.login('CrabDesign', allScopes());
+
+const run = await client.agentRuns.create({
+  appId: 'crabdesign',
+  mode: 'design',
+  sessionId: 'session-optional',
+  input: 'Create a landing page mockup for a fintech dashboard',
+  activeSkillIds: ['brand-system'],
+  knowledgeBaseIds: ['kb-product'],
+  localContextPolicy: {
+    enabled: true,
+    readonly: true,
+    maxBytes: 128_000,
+    allowedTools: ['read_file'],
+  },
+  artifactPolicy: { enabled: true, maxFiles: 10 },
+});
+
+for await (const event of client.agentRuns.stream(run.runId, { throwOnError: false })) {
+  switch (event.type) {
+    case 'text_delta':
+      process.stdout.write(event.text);
+      break;
+    case 'reasoning_delta':
+      console.debug('[reasoning]', event.text);
+      break;
+    case 'local_tool_request': {
+      // SDK only defines the protocol. Product code owns local read-only tools.
+      const content = await readReadonlyLocalContext(event.name, event.input);
+      await client.agentRuns.submitLocalToolResult(run.runId, {
+        requestId: event.requestId,
+        ok: true,
+        content,
+      });
+      break;
+    }
+    case 'artifact': {
+      const file = await client.agentRuns.downloadArtifact(run.runId, event.artifact.id);
+      console.log('artifact', file.filename, file.contentType, file.data.byteLength);
+      break;
+    }
+    case 'error':
+      throw new Error(event.error.message);
+  }
+}
+
+await client.agentRuns.cancel(run.runId); // safe to call from UI cancel buttons
+```
+
+本地工具桥是显式 opt-in：SDK 不内置任何 CrabDesign/CrabCode 专属文件读取逻辑。`local_tool_request` 由下游处理，结果通过 `submitLocalToolResult({ requestId, ok, content | error })` 返回；拒绝、超时和取消都由下游 handler 控制。`allowedTools` 必须使用稳定的 ASCII function name，例如 `read_file`。
+
+`stream(runId)` 支持 durable replay：断线后重新连接同一个 run，会先回放已持久化的 Agent Run SSE 事件，再继续消费运行中的事件。`usage` / `settle` 事件会暴露 `exact`、`cacheReadTokens`、`cacheCreateTokens` 等字段，便于下游展示真实结算状态。
+
 ## 认证
 
 ### 浏览器内 / 自动 OAuth（推荐）
@@ -116,6 +179,7 @@ const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new Fil
 | 模块         | 主要方法                                                                             |
 | ------------ | ------------------------------------------------------------------------------------ |
 | **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`                                          |
+| **Agent Runs** | `agentRuns.create`, `agentRuns.stream`, `agentRuns.run`, `agentRuns.cancel`, `agentRuns.get`, `agentRuns.listArtifacts`, `agentRuns.downloadArtifact`, `agentRuns.submitLocalToolResult`, `agentRuns.runWithLocalTools` |
 | **Auth**     | `login`, `logout`, `ensureToken`, `forceRefresh`, `discover`, `authorize`, `exchangeCode`, `refreshToken` |
 | **Models**   | `listModels`, `listModelsWithStatus`, `getModelCapabilities`, `getQuotaSummary`      |
 | **Skills**   | `browseSkills`, `browseSkillsList`, `getSkillDetail`, `resolveSkill`, `installSkill`, `downloadSkill`, `uploadSkill`, `generateSkill`, `optimizeSkill`, `validateSkill` |
@@ -206,6 +270,7 @@ const view = await client.getBugReport(result.feedback_id);
 | `HTTPError`          | 4xx/5xx，含 `status` / `body` / `requestID`  |
 | `NetworkError`       | TCP/DNS/TLS 失败                             |
 | `StreamError`        | SSE 流解析失败                               |
+| `AgentRunStreamError` | Agent Runs 流返回 `error` 事件（默认抛出；可设 `throwOnError:false` 自行消费） |
 | `BusinessError`      | 网关返回 `code !== 0`，含 `code` / `bizMsg`  |
 | `RateLimitError`     | 429（含 `retryAfter`）                       |
 | `OrderTerminalError` | `waitForPayment` 终态失败                    |
@@ -249,7 +314,9 @@ npm run build
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 1.0.1 | 当前稳定版 | 修复 1.0.0 双层 broken packaging:tsup 输出 `.mjs+.cjs` 与 exports 字段对齐;9 处 `declare module` 绑包名 `@acosmi/sdk-ts` 让 d.ts augmentation 在 consumer 视角合并;prepublishOnly 加 packed-tarball 烟测拦截"源码过 / 打包后 broken"。 |
+| 1.1.0 | 当前稳定版 | 新增 SDK-facing `agentRuns` 网关客户端，覆盖 create/stream/cancel/get/artifacts/local-tool-result，并提供本地只读工具桥协议。 |
+| 1.0.2 | 稳定版 | 修复多进程共享 token refresh rotation 竞态。 |
+| 1.0.1 | 历史稳定版 | 修复 1.0.0 双层 broken packaging:tsup 输出 `.mjs+.cjs` 与 exports 字段对齐;9 处 `declare module` 绑包名 `@acosmi/sdk-ts` 让 d.ts augmentation 在 consumer 视角合并;prepublishOnly 加 packed-tarball 烟测拦截"源码过 / 打包后 broken"。 |
 | 1.0.0 | **deprecated** | 双层 broken:(1) `package.json.exports` 8 处 `.mjs` 引用与 tsup 默认 `.js+.cjs` 错位 → bun/Node ESM `Cannot find module`;(2) 9 处 `declare module` 用相对路径,consumer 视角断链 → 50+ 方法 TS2339。`npm install @acosmi/sdk-ts` 自动跳到 1.0.1。 |
 
 ## License

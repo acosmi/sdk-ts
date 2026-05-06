@@ -68,18 +68,29 @@ try {
   run(npmBin, ['i', tgzPath], tmpDir);
   run(npmBin, ['i', '-D', 'typescript'], tmpDir);
 
-  // 4. smoke.ts: 用包名 import + 调 augmentation method (覆盖 9 处 declare module 中各文件至少一个)
+  // 4. smoke.ts: 用包名 import + 调 augmentation method (覆盖各 declare module 文件至少一个)
   const smokeContent = `import { Client } from '${pkgName}';
 
 declare const c: Client;
 
-// 9 处 declare module augmentation 各取代表方法 (consumer 视角全部应可调)
+// declare module augmentation 各取代表方法 (consumer 视角全部应可调)
 c.getBalance();                       // entitlements.ts
 c.getWalletStats();                   // wallet.ts
 c.listTokenPackages();                // packages.ts
 c.listNotifications(1, 20, '');       // notifications.ts (page, pageSize, typeFilter)
 c.listTools();                        // tools.ts
 c.browseSkillStore({});               // skills.ts
+c.agentRuns.create({ appId: 'app', input: 'hi' }); // client/agent-runs.ts
+c.agentRuns.stream('run_1');          // namespaced agent run gateway
+c.agentRuns.run({ appId: 'app', input: 'hi' });
+c.agentRuns.cancel('run_1');
+c.agentRuns.get('run_1');
+c.agentRuns.listArtifacts('run_1');
+c.agentRuns.downloadArtifact('run_1', 'artifact_1');
+c.agentRuns.submitLocalToolResult('run_1', { requestId: 'local_1', ok: false, error: 'denied' });
+c.agentRuns.runWithLocalTools({ appId: 'app', input: 'hi' }, {
+  read_file: async (_input, ctx) => ({ requestId: ctx.requestId })
+});
 c.submitBugReport({});                // bug-report.ts
 c.applyRequestSanitizers({} as any);  // sanitize-bridge.ts
 // ws.ts: 仅验证类型存在 (实际调用涉及 WebSocket 真连接, smoke 不跑)

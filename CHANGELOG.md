@@ -5,6 +5,38 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-05-06
+
+### Added
+
+- **Agent Runs SDK Gateway** — 新增 `client.agentRuns` namespace，作为 CrabDesign、CrabCode、CrabClaw 等下游产品接入 Acosmi 云端智能体循环的正式 SDK 协议边界：
+  - `create(req, signal?)`
+  - `stream(runId, opts?, signal?)`
+  - `run(req, opts?, signal?)`
+  - `cancel(runId, signal?)`
+  - `get(runId, signal?)`
+  - `listArtifacts(runId, signal?)`
+  - `downloadArtifact(runId, artifactId, signal?)`
+  - `submitLocalToolResult(runId, result, signal?)`
+  - `runWithLocalTools(req, handlers, opts?, signal?)`
+
+- **Agent Run protocol types** — 新增 `AgentRunCreateRequest`、`AgentRunStreamEvent` discriminated union、`AgentRunArtifact`、`AgentRunStreamError` 等公开类型。SDK public API 使用 camelCase，HTTP wire-format 使用 snake_case。
+
+- **Local tool bridge protocol** — SDK 不内置产品专属本地文件读取逻辑；`local_tool_request` 由下游处理，并通过 `submitLocalToolResult({ requestId, ok, content | error })` 返回。便捷封装 `runWithLocalTools` 支持 handler 超时、拒绝和取消。
+
+- **Durable Agent Run Gateway contract** — Nexus Agent Run Gateway 使用租户隔离的 durable run store 持久化 run 状态、SSE event、artifact 和 local tool result；stream 支持断线后的 durable event replay，并将 local tool request 真正桥接到 ADK function call 等待点。
+
+- **Exact usage settlement** — Agent Runs 结算只接受 provider/ADK 透传的 `exact: true` usage，并通过 tk-dist `SettlePrecise(input/output/cacheRead/cacheCreate)` 精算；若 provider 未返回精确 usage，服务端会释放 hold 并返回 `usage_missing_released`，不会用字符数或 token 估算扣费。
+
+### Changed
+
+- **401 retry policy for Agent Runs** — Agent Runs 客户端只对 GET/stream/download 等安全查询做单次 401 refresh retry；`create`、`submitLocalToolResult` 等可能产生副作用的 POST 不自动重放，避免重复创建 run 或重复计费。
+
+### Tests
+
+- 新增 `test/agent-runs.test.ts`，覆盖 create 字段序列化、完整流事件解析、401 refresh 策略、error 事件结构化抛出、local tool result payload、artifact 下载文件名/content-type 解析。
+- `scripts/smoke-pack.mjs` 增加 consumer 视角的 `client.agentRuns` 类型调用验证。
+
 ## [1.0.2] — 2026-05-06
 
 ### Fixed
@@ -96,5 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 36/36 vitest 全绿,源码 typecheck/lint/build 0 错误
 - 翻车机制:`prepublishOnly` 仅跑源码 typecheck/vitest/build,不验证 packed product 在 consumer 视角能否解析
 
+[1.1.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.1.0
+[1.0.2]: https://github.com/acosmi/sdk-ts/releases/tag/v1.0.2
 [1.0.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.0.1
 [1.0.0]: https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.0.0

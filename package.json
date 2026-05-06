@@ -1,7 +1,7 @@
 {
   "name": "@acosmi/sdk-ts",
-  "version": "1.0.2",
-  "description": "Acosmi 模型网关 TypeScript SDK — 双格式 (Anthropic + OpenAI) 多端 (浏览器 / Node ≥18 / Deno / Bun)。Go SDK 全量端口, 1.0 稳定测试版。",
+  "version": "1.1.0",
+  "description": "Acosmi 模型网关与 Agent Run Gateway TypeScript SDK — 双格式 (Anthropic + OpenAI) 多端 (浏览器 / Node ≥18 / Deno / Bun)。",
   "type": "module",
   "main": "./dist/node/index.cjs",
   "module": "./dist/node/index.mjs",
