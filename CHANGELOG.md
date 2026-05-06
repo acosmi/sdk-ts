@@ -5,7 +5,65 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-05-06
+
+### Fixed
+
+- **多进程共享 `~/.acosmi/tokens.json` 撞 `HTTP 400: refresh token not found` 根治** —
+  `Client.ensureToken` / `Client.forceRefresh` 在 `withMu` 临界区内从不 reload 磁盘,
+  导致 P1 完成 refresh token rotation 写盘后, P2 内存仍持旧 R0,下一次 refresh 必然
+  撞网关 400 invalid_grant。CrabCode TUI 多窗口 / `crabclawskill` 并发等典型场景命中。
+
+  双层修复:
+
+  - **Layer 1 — reload-before-refresh** (`src/client.ts`):新增 `Client.syncFromDisk()`
+    在 `ensureToken` / `forceRefresh` 进入临界区后立刻 `store.load()`,若磁盘
+    `refresh_token` 与内存不同则采纳磁盘新版,重判过期 — 未过期直接 fast-return
+    (跳过本进程多余 refresh, 同时避免拿已 invalidated 的 R0 撞网关)。
+  - **Layer 2 — 跨进程临界区** (`src/store.ts`):`TokenStore` 加可选
+    `withLock?<T>(fn): Promise<T>` 方法(向后兼容,自定义 store 不实现自动回退到 L1
+    窄窗口);`FileTokenStore` 实现 sidecar `<path>.lock` + `O_EXCL` 创建语义 + 60s
+    旧锁回收 + 30s 获取超时 + 30+jitter ms backoff,真正消除残余 TOCTOU。
+    `Client.storeWithLock(fn)` helper 把整段 `load → check → refresh → save` 包进
+    跨进程临界区。
+
+- **`FileTokenStore.save` 改 atomic rename** (`src/store.ts`) — 写到
+  `<path>.tmp.<pid>.<ts>.<rand>` 后 `fs.rename` 到正式路径,POSIX 上 `rename(2)`
+  同分区原子, Windows 上 `ReplaceFile`。读端永远看到完整旧/新 JSON,不会读到截断半
+  文件(`Client.create.store.load` 在另一进程写入中间触发也不会 JSON parse 失败)。
+
+### Added
+
+- **`fileLockDefaults` 公开常量** (`src/store.ts`) — 暴露 `acquireTimeoutMs` (30s) /
+  `staleMs` (60s) / `retryBaseMs` (30) / `retryJitterMs` (70),便于测试与诊断。
+
+- **回归测试 7 项**:
+  - `test/auth/multi-process-refresh.test.ts` (4 项):双 Client 共享 FileTokenStore
+    的 rotation 竞态核心回归 / P2 磁盘新 RT 也过期需 refresh / forceRefresh 也走
+    syncFromDisk / 无 rotation 时 0 影响 v1.0.1 行为。
+  - `test/store/file-token-store.test.ts` (3 项 + 4 子):atomic save 终态完整 /
+    并发 save 不混合 / 双 store 实例临界区互斥 / 旧锁自动 break / 错误路径释放锁 /
+    in-process 串行化。
+
+### Compatibility
+
+- **无破坏性变更**:`TokenStore.withLock` 是可选方法,1.0.x 自定义 store 实现 0 改动。
+- **API 兼容**:`Client.ensureToken` / `forceRefresh` 签名不变,`FileTokenStore` 构造器
+  不变。
+- **行为兼容**:单进程场景与 v1.0.1 完全一致(磁盘 RT 与内存一致时 syncFromDisk 早返,
+  flock 单进程零竞争 ~1ms 开销)。
+
+### Notes
+
+- **Go SDK 镜像修复待发**:`acosmi-sdk-go` 同根因(`client.go:316-383` `ensureToken` +
+  `:2143-2168` `forceRefresh` + `store.go` `FileTokenStore` 缺 flock),将在 v0.19.1
+  对齐修复。
+- **NFS / 跨机共享警告**:`O_EXCL` 在 NFS 上不保证原子。FileTokenStore 设计目标是本地
+  文件系统(用户家目录)。真要跨机共享 token, 应实现自定义 Keychain / 数据库 store。
+
 ## [1.0.1] — 2026-05-01
+
+> **Released**: sdk 仓 commit `0d8c0a9` + tag `v1.0.1` → release.yml CI 全自动 npm publish。已通过 audit Part 2 实拉验证 (`npm i @acosmi/sdk-ts@1.0.1` consumer 视角 smoke `tsc --noEmit` 全绿,9 处 declare module 在 dist/node/index.d.ts 行 548/571/592/601/645/654/677/720/761 全包名)。
 
 ### Fixed
 

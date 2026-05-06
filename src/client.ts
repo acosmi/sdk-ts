@@ -493,68 +493,83 @@ export class Client {
       return tokens.access_token;
     }
 
-    // 需要刷新 — 用 mu 串行化以防并发刷新
-    return this.withMu(async () => {
-      // 双检
-      if (this.tokens == null) {
-        throw new Error('not authorized, call login() first');
-      }
-      if (!tokenSetIsExpired(this.tokens)) {
-        return this.tokens.access_token;
-      }
-
-      if (this.meta == null) {
-        try {
-          this.meta = await discover(this.serverURL, signal);
-        } catch (e) {
-          throw new Error(
-            `discover for refresh: ${e instanceof Error ? e.message : String(e)}`,
-          );
+    // 需要刷新 — 双层串行: withMu 进程内 + storeWithLock 跨进程 (FileTokenStore 实现 sidecar
+    // .lock 文件; LocalStorage / InMemory 单进程语义无需此层, 自动 no-op).
+    //
+    // v1.0.2 修复多进程共享 ~/.acosmi/tokens.json 时撞 "HTTP 400: refresh token not found":
+    //   1) 进入跨进程临界区后, store.load() 重读磁盘 — 别的进程可能已完成 rotation
+    //   2) 若磁盘 refresh_token ≠ 内存 → 采纳磁盘新版 → 重判过期 → 未过期则直接返回
+    //      (跳过本进程的多余 refresh, 同时避免拿已 invalidated 的 R0 撞网关)
+    return this.withMu(() =>
+      this.storeWithLock(async () => {
+        await this.syncFromDisk();
+        // 双检 — 同 v1.0.1 逻辑
+        if (this.tokens == null) {
+          throw new Error('not authorized, call login() first');
         }
-      }
+        if (!tokenSetIsExpired(this.tokens)) {
+          return this.tokens.access_token;
+        }
 
-      let tokenResp;
-      try {
-        tokenResp = await refreshToken(this.meta, this.tokens.client_id, this.tokens.refresh_token, signal);
-      } catch (e) {
-        throw new Error(`refresh token: ${e instanceof Error ? e.message : String(e)}`);
-      }
+        if (this.meta == null) {
+          try {
+            this.meta = await discover(this.serverURL, signal);
+          } catch (e) {
+            throw new Error(
+              `discover for refresh: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
 
-      this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
-      try {
-        await this.store.save(this.tokens);
-      } catch (e) {
-        console.warn(`[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
+        let tokenResp;
+        try {
+          tokenResp = await refreshToken(this.meta, this.tokens.client_id, this.tokens.refresh_token, signal);
+        } catch (e) {
+          throw new Error(`refresh token: ${e instanceof Error ? e.message : String(e)}`);
+        }
 
-      return this.tokens.access_token;
-    });
+        this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
+        try {
+          await this.store.save(this.tokens);
+        } catch (e) {
+          console.warn(`[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+
+        return this.tokens.access_token;
+      }),
+    );
   }
 
   /** 强制刷新 token (用于 401 重试) */
   async forceRefresh(signal?: AbortSignal): Promise<void> {
-    return this.withMu(async () => {
-      if (this.tokens == null) {
-        throw new Error('no tokens to refresh');
-      }
-      if (this.meta == null) {
-        this.meta = await discover(this.serverURL, signal);
-      }
-      const tokenResp = await refreshToken(
-        this.meta,
-        this.tokens.client_id,
-        this.tokens.refresh_token,
-        signal,
-      );
-      this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
-      try {
-        await this.store.save(this.tokens);
-      } catch (e) {
-        console.warn(
-          `[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`,
+    return this.withMu(() =>
+      this.storeWithLock(async () => {
+        // v1.0.2: 同 ensureToken — 进入跨进程临界区后先同步磁盘. 别的进程刚 rotation
+        // 过的话, 磁盘上是新 RT, 网关返回 401 触发本进程 forceRefresh 用磁盘新 RT 即可成功;
+        // 否则用旧 RT 必撞 "refresh token not found" 400.
+        await this.syncFromDisk();
+        if (this.tokens == null) {
+          throw new Error('no tokens to refresh');
+        }
+        if (this.meta == null) {
+          this.meta = await discover(this.serverURL, signal);
+        }
+        const tokenResp = await refreshToken(
+          this.meta,
+          this.tokens.client_id,
+          this.tokens.refresh_token,
+          signal,
         );
-      }
-    });
+        this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
+        try {
+          await this.store.save(this.tokens);
+        } catch (e) {
+          console.warn(
+            `[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }),
+    );
   }
 
   /** 互斥锁 helper (替代 Go sync.Mutex) */
@@ -565,6 +580,33 @@ export class Client {
       () => undefined,
     );
     return next;
+  }
+
+  /** v1.0.2: 跨进程临界区 helper. store.withLock 可选, 缺省则直接调用 fn (LocalStorage /
+   *  InMemory 单进程无需). */
+  private async storeWithLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lock = this.store.withLock;
+    if (typeof lock === 'function') {
+      return lock.call(this.store, fn) as Promise<T>;
+    }
+    return fn();
+  }
+
+  /** v1.0.2: 从磁盘同步 token (refresh 前). 别的进程 rotation 后磁盘 refresh_token 已变,
+   *  本进程内存仍是旧 R0; 不同步直接 refresh 必撞网关 400. load 失败保留内存继续 (容错). */
+  private async syncFromDisk(): Promise<void> {
+    let onDisk: TokenSet | null = null;
+    try {
+      onDisk = await this.store.load();
+    } catch {
+      // 磁盘读失败 (文件损坏 / 权限) — 不阻塞 refresh, 让后续 refreshToken 暴露真实错误
+      return;
+    }
+    if (!onDisk) return;
+    // 磁盘有 token 且 RT 与内存不一致 — 采纳磁盘新版 (典型: 别的进程已 rotation)
+    if (this.tokens == null || onDisk.refresh_token !== this.tokens.refresh_token) {
+      this.tokens = onDisk;
+    }
   }
 
   // ===========================================================================

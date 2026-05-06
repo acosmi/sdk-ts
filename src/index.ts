@@ -54,6 +54,7 @@ export {
   LocalStorageTokenStore,
   InMemoryTokenStore,
   newFileTokenStore,
+  fileLockDefaults,
 } from './store';
 
 // === Retry ===
