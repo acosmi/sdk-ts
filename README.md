@@ -8,7 +8,7 @@
 
 - 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
 - 当前版本：**1.1.0**（新增 SDK-facing Agent Runs 公开 API；详见 [CHANGELOG](./CHANGELOG.md)）
-- 测试：55/55 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
+- 测试：56/56 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.1.0) · [tarball](https://registry.npmjs.org/@acosmi/sdk-ts/-/sdk-ts-1.1.0.tgz) · [GitHub Release](https://github.com/acosmi/sdk-ts/releases/tag/v1.1.0)
 
 ## 安装
