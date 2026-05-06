@@ -1,0 +1,85 @@
+{
+  "name": "@acosmi/sdk-ts",
+  "version": "1.1.0",
+  "description": "Acosmi 模型网关与 Agent Run Gateway TypeScript SDK — 双格式 (Anthropic + OpenAI) 多端 (浏览器 / Node ≥18 / Deno / Bun)。",
+  "type": "module",
+  "main": "./dist/node/index.cjs",
+  "module": "./dist/node/index.mjs",
+  "types": "./dist/node/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/node/index.d.ts",
+      "browser": "./dist/browser/index.mjs",
+      "deno": "./dist/index.mjs",
+      "node": {
+        "types": "./dist/node/index.d.ts",
+        "import": "./dist/node/index.mjs",
+        "require": "./dist/node/index.cjs"
+      },
+      "default": "./dist/index.mjs"
+    },
+    "./adapters/anthropic": {
+      "types": "./dist/node/adapters/anthropic.d.ts",
+      "import": "./dist/node/adapters/anthropic.mjs",
+      "require": "./dist/node/adapters/anthropic.cjs"
+    },
+    "./adapters/openai": {
+      "types": "./dist/node/adapters/openai.d.ts",
+      "import": "./dist/node/adapters/openai.mjs",
+      "require": "./dist/node/adapters/openai.cjs"
+    },
+    "./sanitize": {
+      "types": "./dist/node/sanitize/index.d.ts",
+      "import": "./dist/node/sanitize/index.mjs",
+      "require": "./dist/node/sanitize/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.{ts,json}\"",
+    "typecheck": "tsc --noEmit",
+    "test:pack": "node scripts/smoke-pack.mjs",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build && npm run test:pack"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "acosmi",
+    "anthropic",
+    "openai",
+    "llm",
+    "sdk",
+    "claude",
+    "crabcode",
+    "crabclaw"
+  ],
+  "license": "MIT",
+  "author": "Acosmi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acosmi/sdk-ts.git"
+  },
+  "homepage": "https://github.com/acosmi/sdk-ts#readme",
+  "bugs": {
+    "url": "https://github.com/acosmi/sdk-ts/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.0.0"
+  }
+}
