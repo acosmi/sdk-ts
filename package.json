@@ -1,6 +1,6 @@
 {
   "name": "@acosmi/sdk-ts",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Acosmi 模型网关与 Agent Run Gateway TypeScript SDK — 双格式 (Anthropic + OpenAI) 多端 (浏览器 / Node ≥18 / Deno / Bun)。",
   "type": "module",
   "main": "./dist/node/index.cjs",

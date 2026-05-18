@@ -96,7 +96,33 @@ export interface ModelCapabilities {
   // Token 上限 (冗余但便于查询)
   max_input_tokens: number;
   max_output_tokens: number;
+
+  /**
+   * 桌面视觉理解 sidecar 能力 (v1.2+):
+   * 为 true 表示该模型适合作为桌面截图解析 sidecar — 输入 screenshot,
+   * 输出结构化 UI/视觉描述, 供非多模态主模型消费 (CrabCode desktop automation /
+   * computer-use 选模型时使用).
+   *
+   * 与 ManagedModel.inputModalities=['image'] 是正交两件事:
+   *   - inputModalities 描述"模型能不能吃图片输入"
+   *   - supports_desktop_visual_understanding 描述"模型是不是被运营标记为
+   *     适合做桌面 UI 解析的 sidecar" (有些通用视觉模型并不擅长 UI 解析)
+   *
+   * 调用方不应通过模型名 substring 推断此能力; 必须读上游下发字段.
+   */
+  supports_desktop_visual_understanding?: boolean;
 }
+
+/**
+ * 模型可接收的用户输入模态 (v1.2+).
+ *
+ * - 'text': 文本输入
+ * - 'image': 截图 / 图片输入 (多模态)
+ *
+ * ManagedModel.inputModalities 包含 'image' 才允许向该模型直接发图;
+ * 缺失字段时调用方应保守按 text-only / unknown 处理.
+ */
+export type InputModality = 'text' | 'image';
 
 /** BucketClass 字面量常量 — V30 二轮审计 D-P1-3 修复 */
 export const BucketClassCommercial = 'COMMERCIAL';
@@ -165,6 +191,18 @@ export interface ManagedModel {
    *   - 普通用户 → 非空, 含 quota/used/remaining 求和
    */
   bucketInfo?: BucketInfo;
+
+  /**
+   * 模型可接收的用户输入模态 (v1.2+, CrabCode desktop automation / computer-use 选模型用).
+   *
+   * 取值: 'text' | 'image' 的子集. 'image' 表示模型可直接接收 screenshot/image 输入.
+   *
+   * 兼容上游字段名 input_modalities (snake_case) — listModels 在写缓存前会做归一化.
+   *
+   * **缺失语义**: 上游未下发时该字段为 undefined, 调用方必须保守按 text-only / unknown
+   * 处理, 严禁默认假设支持 image. 同样严禁用模型名 substring 反推 modality.
+   */
+  inputModalities?: InputModality[];
 }
 
 // =============================================================================

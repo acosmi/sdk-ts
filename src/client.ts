@@ -643,8 +643,9 @@ export class Client {
       null,
       signal,
     );
-    // 写入模型缓存
-    this.modelCache = result.data;
+    // v1.2: 写缓存前归一化 input_modalities → inputModalities (snake/camel 双名兼容)
+    const normalized = normalizeInputModalities(result.data);
+    this.modelCache = normalized;
     this.modelCacheTimeMs = Date.now();
 
     let status: FilterStatus = '';
@@ -652,7 +653,7 @@ export class Client {
       const h = headers.get('X-Entitlement-Filter-Status');
       if (h) status = h as FilterStatus;
     }
-    return { models: result.data, status };
+    return { models: normalized, status };
   }
 
   /** 查询当前用户账户级权益总览 (v0.19+) */
@@ -1468,7 +1469,33 @@ function zeroModelCapabilities(): ModelCapabilities {
     supports_redact_thinking: false,
     max_input_tokens: 0,
     max_output_tokens: 0,
+    supports_desktop_visual_understanding: false,
   };
+}
+
+/**
+ * 归一化上游 ManagedModel 列表中的 input_modalities (snake_case) → inputModalities (camelCase).
+ *
+ * 设计:
+ *   - 同时存在 camelCase 与 snake_case 时, camelCase 胜 (官方契约).
+ *   - 仅 snake_case 时, 拷一份到 camelCase 让 SDK 用户只读一个字段.
+ *   - 都没有时不补 default ['text'], 留 undefined — 让调用方知道这是 "未声明" 而非 "明确 text-only".
+ *
+ * 该函数 in-place 修改并返回输入数组 (与现网调用方共享同一引用, 避免额外拷贝).
+ */
+function normalizeInputModalities(models: ManagedModel[]): ManagedModel[] {
+  if (!Array.isArray(models)) return models;
+  for (const m of models) {
+    if (!m || typeof m !== 'object') continue;
+    if (Array.isArray(m.inputModalities)) continue;
+    const snake = (m as ManagedModel & { input_modalities?: unknown }).input_modalities;
+    if (Array.isArray(snake)) {
+      m.inputModalities = snake.filter(
+        (v): v is 'text' | 'image' => v === 'text' || v === 'image',
+      );
+    }
+  }
+  return models;
 }
 
 interface ReqTimeoutCtl {

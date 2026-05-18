@@ -7,6 +7,14 @@
 // === 类型 ===
 export * from './types';
 
+// === Model catalog helpers (v1.2+, CrabCode desktop automation 选模型用) ===
+export {
+  modelSupportsInputModality,
+  modelSupportsImageInput,
+  findFirstModelByInputModality,
+  findDesktopVisualUnderstandingModel,
+} from './model-helpers';
+
 // === Adapters (双格式) ===
 export {
   ProviderFormat,
