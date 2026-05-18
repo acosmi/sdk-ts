@@ -7,9 +7,9 @@
 ## 状态
 
 - 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
-- 当前版本：**1.1.0**（新增 SDK-facing Agent Runs 公开 API；详见 [CHANGELOG](./CHANGELOG.md)）
-- 测试：56/56 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
-- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.1.0) · [tarball](https://registry.npmjs.org/@acosmi/sdk-ts/-/sdk-ts-1.1.0.tgz) · [GitHub Release](https://github.com/acosmi/sdk-ts/releases/tag/v1.1.0)
+- 当前版本：**1.2.0**（新增 `ManagedModel.inputModalities` + `ModelCapabilities.supports_desktop_visual_understanding` + 4 catalog helpers，供 CrabCode desktop automation / computer-use 选模型用；详见 [CHANGELOG](./CHANGELOG.md)）
+- 测试：79/79 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
+- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.2.0) · [tarball](https://registry.npmjs.org/@acosmi/sdk-ts/-/sdk-ts-1.2.0.tgz) · [GitHub Release](https://github.com/acosmi/sdk-ts/releases/tag/v1.2.0)
 
 ## 安装
 
@@ -181,7 +181,7 @@ const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new Fil
 | **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`                                          |
 | **Agent Runs** | `agentRuns.create`, `agentRuns.stream`, `agentRuns.run`, `agentRuns.cancel`, `agentRuns.get`, `agentRuns.listArtifacts`, `agentRuns.downloadArtifact`, `agentRuns.submitLocalToolResult`, `agentRuns.runWithLocalTools` |
 | **Auth**     | `login`, `logout`, `ensureToken`, `forceRefresh`, `discover`, `authorize`, `exchangeCode`, `refreshToken` |
-| **Models**   | `listModels`, `listModelsWithStatus`, `getModelCapabilities`, `getQuotaSummary`      |
+| **Models**   | `listModels`, `listModelsWithStatus`, `getModelCapabilities`, `getQuotaSummary`, `modelSupportsInputModality`, `modelSupportsImageInput`, `findFirstModelByInputModality`, `findDesktopVisualUnderstandingModel` |
 | **Skills**   | `browseSkills`, `browseSkillsList`, `getSkillDetail`, `resolveSkill`, `installSkill`, `downloadSkill`, `uploadSkill`, `generateSkill`, `optimizeSkill`, `validateSkill` |
 | **Tools**    | `listTools`, `getTool`                                                               |
 | **Wallet**   | `getWalletStats`, `getWalletTransactions`                                            |
@@ -229,6 +229,38 @@ const resp = await client.chat('claude-opus-4-7', {
 ```
 
 `AllowedDomains` / `BlockedDomains` 互斥，同时传入抛 `Error`。
+
+### 示例：桌面视觉理解 sidecar 选模型（CrabCode desktop automation / computer-use）
+
+```ts
+import {
+  Client,
+  findDesktopVisualUnderstandingModel,
+  modelSupportsImageInput,
+} from '@acosmi/sdk-ts';
+
+const client = new Client({ serverURL: 'https://acosmi.com' });
+const models = await client.listModels();
+
+// 1) 主模型是否能直接吃截图？
+const primaryCanSeeImages = modelSupportsImageInput(
+  models.find((m) => m.modelId === 'deepseek-v4') ?? null,
+);
+
+// 2) 不能 → 走桌面视觉 sidecar：截图先送 sidecar 解析为结构化 UI 描述，再喂主模型
+const sidecar = findDesktopVisualUnderstandingModel(models);
+if (!sidecar) {
+  throw new Error('No desktop visual understanding model available — 让管理员在网关启用一个 sidecar 模型');
+}
+console.log('sidecar →', sidecar.modelId);
+```
+
+红线：
+
+- `ManagedModel.inputModalities` 用于客户端判断模型可接收的用户输入类型（'text' | 'image'）。
+- `capabilities.supports_desktop_visual_understanding` 用于选择专门解析桌面截图的视觉 sidecar 模型，与 `inputModalities` 是正交两件事（普通视觉模型不一定擅长 UI 解析）。
+- 客户端不应硬编码模型名做能力推断，应完全依赖 SDK catalog 字段。
+- 上游未下发 `inputModalities` 时 SDK 保持 `undefined`，调用方必须保守按 text-only / unknown 处理。
 
 ### 示例：钱包 + 余额 + 流量包购买
 
