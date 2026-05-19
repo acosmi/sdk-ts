@@ -55,6 +55,11 @@ export {
 // === Scopes ===
 export * from './scopes';
 
+// === Compliance (W3 稳定客户端语义) ===
+// 仅暴露 envelope/审批/provider/billing 的对外稳定状态与错误码，
+// 不暴露 CFCA / JKS / P7 / provider ledger / distribution billing 内部 API。
+export * from './compliance-status';
+
 // === TokenStore ===
 export {
   type TokenStore,
