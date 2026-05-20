@@ -252,6 +252,25 @@ switch (info.key) {
 `CompliancePollError` is used by polling helpers for terminal failure, timeout,
 abort, and unknown states.
 
+## Method Status
+
+Each `client.compliance.*` method has one of four maturity grades. Treat this
+table as the contract — `gated` methods are expected to fail-closed until the
+backend step-up / gate is opened, and the SDK never retries or fakes success
+for them.
+
+| Status | Methods | Meaning |
+| --- | --- | --- |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `getProviderRequest`, `waitForProviderRequestTerminal`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
+| `draft contract` | operation views, gate-status views, binary download helpers | Type drafts only — not exposed as callable capability in this release. |
+| `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
+
+`submitSealApproval` is `production-ready`: the backend enforces
+`Idempotency-Key` + business-fingerprint replay protection, so a repeated submit
+with the same key returns the original approval id instead of creating a
+duplicate. Persist the idempotency key on the caller side.
+
 ## Safety Boundary
 
 Do not place any of the following in SDK code, tests, examples, docs, git

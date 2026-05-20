@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.3.2] — 2026-05-20
+
+> 生产闭环实施计划（`Acosmi-Compliance-SDK-Csign-PC-CrabCode-生产闭环实施计划-2026-05-20`）
+> Phase 1 / Phase 5 / Phase 7 的 SDK 侧收口版本。
+
 ### Added
 
 - **`ScopeComplianceReportsWrite`（`compliance:reports:write`）** — 新增第 13 个
   细粒度 compliance scope，专用于创建出证报告。`complianceScopes()` 已包含该 scope，
   字面量与 Go `DesktopOAuthScopes` / `ScopesSupported`、Java `ComplianceScopes`
   三端一致。
+- **Compliance 方法状态分级** — `docs/compliance.md` 新增「Method Status」一节，
+  把每个 `client.compliance.*` 方法标注为 `production-ready` / `gated` /
+  `draft contract` / `internal-only` 四档；`gated`（`publishReport` / `signEnvelope` /
+  `createH5SigningUrl` / `approveSealApproval`）在服务端 step-up / 闸门未闭合前会
+  一致 fail-closed，SDK 不重试、不伪成功。`internal-only`（distribution billing /
+  provider raw / callback / CFCA 材料）不在 SDK 调用面。
 
 ### Changed
 
@@ -23,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   存量用户需重新走一次 OAuth 授权流程才能继续创建报告。`getReport` /
   `downloadReport` 继续用 `compliance:reports:read`，`publishReport` 继续用
   `compliance:reports:publish` + step-up（发布闸门不变）。
+- **`verifyEvidencePublic` 可匿名调用** — 公开验真不再要求先 `login()`：未持有
+  token 时 SDK 直接发匿名请求，不再抛 `not authorized, call login() first`；已持有
+  token 时附带 `Authorization` 以保留审计上下文。public 端点收到 `401` 不触发
+  `forceRefresh`、不做 refresh replay。
+
+### Safety
+
+- 公开验真匿名链路与认证写链路边界保持不变：写方法仍不自动 retry、401 不刷新重放；
+  匿名 public verify 不复用 `/api/v4`，走 `client.complianceURL(path)`。
 
 ---
 

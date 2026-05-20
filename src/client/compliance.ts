@@ -279,9 +279,10 @@ export class ComplianceClient {
   /**
    * 发布报告（写，step-up 必须）。
    *
-   * 缺少 step-up 时服务端会返回 `COMPLIANCE_STEP_UP_REQUIRED`（数值码
-   * 1031000013）。SDK 不会自动重试；调用方需要引导用户重新做 OAuth introspection 或
-   * 重新登录后再次调用本方法（使用同一 idempotency-key）。
+   * `@status gated` — step-up 闸门未闭合前服务端会一致返回
+   * `COMPLIANCE_STEP_UP_REQUIRED`（数值码 1031000013）。SDK 不会自动重试、不伪成功；
+   * 调用方需要引导用户重新做 OAuth introspection 或重新登录后再次调用本方法
+   *（使用同一 idempotency-key）。方法状态分级见 `docs/compliance.md` Method Status。
    */
   publishReport(id: number, opts: ComplianceWriteOptions = {}): Promise<ComplianceReport> {
     return this.write<ComplianceReport>(
@@ -339,7 +340,7 @@ export class ComplianceClient {
   /**
    * 正式签署（写，step-up 必须）。
    *
-   * 服务端闸门关闭时会一致返回 `ENVELOPE_GATE_CLOSED` (1031004004)。
+   * `@status gated` — 服务端闸门关闭时会一致返回 `ENVELOPE_GATE_CLOSED` (1031004004)。
    * SDK 不重试、不伪成功；调用方应该将该错误展示为"功能未开放"。
    */
   signEnvelope(
@@ -358,7 +359,7 @@ export class ComplianceClient {
   /**
    * 创建 H5 签署短链（写，step-up 必须）。
    *
-   * 同上：服务端闸门关闭时 SDK 不重试。
+   * `@status gated` — 同 {@link signEnvelope}：服务端闸门关闭时 SDK 不重试、不伪成功。
    */
   createH5SigningUrl(
     envelopeId: number,
@@ -390,6 +391,13 @@ export class ComplianceClient {
   // Seal Approval
   // =========================================================================
 
+  /**
+   * 提交用印审批申请（写）。
+   *
+   * `@status production-ready` — 服务端以 `Idempotency-Key` + 业务请求指纹做重放保护：
+   * 同 key + 同请求 → 返回原审批 id；同 key + 不同请求 → 拒绝复用幂等键。强烈建议调用方
+   * 持久化 `idempotencyKey`，网络重试 / 任务恢复时复用，避免重复创建审批单。
+   */
   submitSealApproval(
     req: SubmitSealApprovalRequest,
     opts: ComplianceWriteOptions = {},
@@ -402,6 +410,12 @@ export class ComplianceClient {
     );
   }
 
+  /**
+   * 审批通过用印申请（写，step-up 必须）。
+   *
+   * `@status gated` — step-up 未闭合前服务端会返回 `COMPLIANCE_STEP_UP_REQUIRED`。
+   * SDK 不重试、不伪成功。方法状态分级见 `docs/compliance.md` Method Status。
+   */
   approveSealApproval(
     id: number,
     query: ApproveSealApprovalQuery,

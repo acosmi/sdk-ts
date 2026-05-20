@@ -7,7 +7,7 @@
 ## 状态
 
 - 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
-- 当前版本：**1.3.1**（修订 npm 包介绍与搜索关键词；`1.3.0` 新增 `client.compliance`、`complianceBaseURL`、合规域 types/errors/status/scopes、示例与文档；详见 [CHANGELOG](./CHANGELOG.md)）
+- 当前版本：**1.3.2**（`verifyEvidencePublic` 匿名公开验真收口、新增 `compliance:reports:write` scope、compliance 方法状态四档分级；`1.3.0` 新增 `client.compliance`、`complianceBaseURL`、合规域 types/errors/status/scopes、示例与文档；详见 [CHANGELOG](./CHANGELOG.md)）
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
 
@@ -489,7 +489,8 @@ npm run build
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 1.3.1 | 当前稳定版 | 修订 npm 包短介绍与搜索关键词，明确模型网关、Agent Run Gateway 与 Compliance 统一客户端定位。 |
+| 1.3.2 | 当前稳定版 | `verifyEvidencePublic` 匿名公开验真链路收口（未登录不抛 `not authorized`）；新增第 13 个 compliance scope `compliance:reports:write`（创建出证报告改用写 scope）；`docs/compliance.md` 新增方法状态四档分级（production-ready / gated / draft contract / internal-only）。 |
+| 1.3.1 | 稳定版 | 修订 npm 包短介绍与搜索关键词，明确模型网关、Agent Run Gateway 与 Compliance 统一客户端定位。 |
 | 1.3.0 | 稳定版 | 新增 compliance SDK client、base URL、types/errors/status/scopes、docs/examples/tests，并明确 idempotency/no-retry/no-401-replay 与 provider material 安全边界。 |
 | 1.2.0 | 稳定版 | 新增 `ManagedModel.inputModalities`、桌面视觉理解 sidecar capability 与 4 个 catalog helpers。 |
 | 1.1.0 | 稳定版 | 新增 SDK-facing `agentRuns` 网关客户端，覆盖 create/stream/cancel/get/artifacts/local-tool-result，并提供本地只读工具桥协议。 |
