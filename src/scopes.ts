@@ -55,6 +55,7 @@ export const ScopeComplianceSealApprovalApprove = 'compliance:seal_approval:appr
 export const ScopeComplianceSealUseExecute = 'compliance:seal_use:execute';
 
 export const ScopeComplianceReportsRead = 'compliance:reports:read';
+export const ScopeComplianceReportsWrite = 'compliance:reports:write';
 export const ScopeComplianceReportsPublish = 'compliance:reports:publish';
 
 /** 类型联合：合规域细粒度 scope。Java compliance verifier 只按细粒度匹配, 不做分组展开。 */
@@ -70,6 +71,7 @@ export type ComplianceScope =
   | typeof ScopeComplianceSealApprovalApprove
   | typeof ScopeComplianceSealUseExecute
   | typeof ScopeComplianceReportsRead
+  | typeof ScopeComplianceReportsWrite
   | typeof ScopeComplianceReportsPublish;
 
 /** 全部分组 scope (推荐) */
@@ -91,6 +93,7 @@ export function complianceScopes(): ComplianceScope[] {
     ScopeComplianceSealApprovalApprove,
     ScopeComplianceSealUseExecute,
     ScopeComplianceReportsRead,
+    ScopeComplianceReportsWrite,
     ScopeComplianceReportsPublish,
   ];
 }

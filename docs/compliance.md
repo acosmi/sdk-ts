@@ -80,6 +80,16 @@ await client.login('Read-only Compliance App', [
 Compliance scopes are independent from `ScopeAI`, `ScopeSkills`, and
 `ScopeAccount`. Holding the general scopes does not grant compliance access.
 
+Report scopes are split by action:
+
+- `ScopeComplianceReportsRead` — `getReport`, `downloadReport`.
+- `ScopeComplianceReportsWrite` — `createReport`. This scope was added after the
+  initial release; tokens issued before it existed do **not** carry it. An app
+  that calls `createReport` must request `ScopeComplianceReportsWrite` at
+  `login()` time, and existing users must re-authorize (run the OAuth flow
+  again) so the new scope is granted.
+- `ScopeComplianceReportsPublish` — `publishReport` (also requires step-up).
+
 ## Base URL
 
 `Client` keeps the existing model gateway path under `/api/v4`. Compliance uses
@@ -173,6 +183,13 @@ console.log(result.manifestOfflineVerify);
 The public result includes stable evidence and hash fields only. It excludes PII,
 contract originals, storage bucket/key values, subject snapshot IDs, provider raw
 payloads, and timestamp authority internals.
+
+`verifyEvidencePublic` is anonymous-capable. It does not require `login()`: when no
+token is available the SDK sends an anonymous request instead of throwing
+`not authorized, call login() first`. When the client already holds a token the
+request carries the `Authorization` header so the backend can keep audit context.
+Unlike authenticated GET reads, public verification never triggers a token
+refresh/replay on `401`.
 
 ## Signing And Provider Request Polling
 

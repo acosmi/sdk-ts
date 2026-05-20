@@ -34,6 +34,15 @@ function clientWith(fetchImpl: typeof fetch, opts: { complianceBaseURL?: string 
   return client;
 }
 
+/** 未 login 的客户端 — tokens 保持 null（构造函数不加载 store）。用于公开 verify 匿名路径测试。 */
+function anonClient(fetchImpl: typeof fetch, opts: { complianceBaseURL?: string } = {}): Client {
+  return new Client({
+    serverURL: 'https://nexus.test',
+    complianceBaseURL: opts.complianceBaseURL,
+    fetchImpl,
+  });
+}
+
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -165,6 +174,82 @@ describe('ComplianceClient — read (GET)', () => {
     expect((out as unknown as Record<string, unknown>).subjectSnapshotId).toBeUndefined();
     expect((out as unknown as Record<string, unknown>).provider).toBeUndefined();
     expect(calls[0].url).toContain('/compliance/evidence/verify?evidenceNo=EV-public');
+  });
+});
+
+describe('ComplianceClient — public verify (anonymous)', () => {
+  const publicData = {
+    code: 0,
+    data: {
+      evidenceNo: 'EV-public',
+      assetType: 'HASH_ONLY',
+      hashAlgorithm: 'sha256',
+      contentHash: 'abcd',
+      manifestOfflineVerify: true,
+    },
+  };
+
+  it('does not throw "not authorized" when called without login', async () => {
+    const { fetch } = captureFetch(() => jsonResponse(publicData));
+    const client = anonClient(fetch);
+    expect(client.isAuthorized()).toBe(false);
+    // 未 login 不再走 ensureToken 抛错路径
+    const out = await client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-public' });
+    expect(out.evidenceNo).toBe('EV-public');
+  });
+
+  it('sends NO Authorization header when not logged in (anonymous request)', async () => {
+    const { fetch, calls } = captureFetch(() => jsonResponse(publicData));
+    const client = anonClient(fetch);
+    await client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-public' });
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers.Authorization).toBeUndefined();
+  });
+
+  it('sends Authorization header when a token is present (audit context preserved)', async () => {
+    const { fetch, calls } = captureFetch(() => jsonResponse(publicData));
+    const client = clientWith(fetch);
+    await client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-public' });
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer token-1' });
+  });
+
+  it('honors complianceBaseURL and never targets /api/v4', async () => {
+    const { fetch, calls } = captureFetch(() => jsonResponse(publicData));
+    const client = anonClient(fetch, { complianceBaseURL: 'https://compliance.test' });
+    await client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-public' });
+    expect(calls[0].url).toBe(
+      'https://compliance.test/compliance/evidence/verify?evidenceNo=EV-public',
+    );
+    expect(calls[0].url).not.toContain('/api/v4');
+  });
+
+  it('defaults to ${serverURL}/admin-api and never targets /api/v4', async () => {
+    const { fetch, calls } = captureFetch(() => jsonResponse(publicData));
+    const client = anonClient(fetch);
+    await client.compliance.verifyEvidencePublic({ publicVerifyCode: 'PVC-1' });
+    expect(calls[0].url).toBe(
+      'https://nexus.test/admin-api/compliance/evidence/verify?publicVerifyCode=PVC-1',
+    );
+    expect(calls[0].url).not.toContain('/api/v4');
+  });
+
+  it('401 does NOT trigger forceRefresh or replay (public endpoint, no refresh)', async () => {
+    let count = 0;
+    const { fetch, calls } = captureFetch(() => {
+      count++;
+      return emptyResponse(401);
+    });
+    const client = clientWith(fetch);
+    let refreshCount = 0;
+    client.forceRefresh = async () => {
+      refreshCount++;
+    };
+    await expect(
+      client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-public' }),
+    ).rejects.toThrow();
+    expect(count).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(refreshCount).toBe(0); // public verify 不触发 forceRefresh
   });
 });
 

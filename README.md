@@ -382,6 +382,13 @@ const result = await client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-00
 console.log(result.manifestOfflineVerify);
 ```
 
+### 公开 verify 匿名语义
+
+`verifyEvidencePublic` 可匿名调用：未 `login()` 时 SDK 直接发匿名请求，不会抛
+`not authorized, call login() first`。客户端已持有 token 时请求会附带 `Authorization`，
+便于后端保留审计上下文。与认证 GET 读不同，public verify 收到 `401` 不会触发
+`forceRefresh`、不做 refresh replay。
+
 ### 写操作幂等与 401 策略
 
 合规域写操作有别于普通 API：
@@ -418,7 +425,7 @@ client.compliance.waitForTimestampVerified(id, opts?)
 
 client.compliance.buildEvidencePackage(assetId, timestampTokenId?, options?)
 
-client.compliance.createReport(req, options?)
+client.compliance.createReport(req, options?)    // 需 compliance:reports:write
 client.compliance.getReport(id, signal?)
 client.compliance.publishReport(id, options?)    // step-up
 client.compliance.downloadReport(id, signal?)    // 离线复核 hash 视图

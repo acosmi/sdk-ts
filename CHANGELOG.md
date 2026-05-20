@@ -5,6 +5,27 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ScopeComplianceReportsWrite`（`compliance:reports:write`）** — 新增第 13 个
+  细粒度 compliance scope，专用于创建出证报告。`complianceScopes()` 已包含该 scope，
+  字面量与 Go `DesktopOAuthScopes` / `ScopesSupported`、Java `ComplianceScopes`
+  三端一致。
+
+### Changed
+
+- **创建出证报告需要新 scope** — `client.compliance.createReport` 对应的服务端
+  scope 从 `compliance:reports:read` 切换到独立的写 scope
+  `compliance:reports:write`。调用 `createReport` 的应用必须在 `login()` 时申请
+  `ScopeComplianceReportsWrite`；在该 scope 发布前签发的旧 token 不含此 scope，
+  存量用户需重新走一次 OAuth 授权流程才能继续创建报告。`getReport` /
+  `downloadReport` 继续用 `compliance:reports:read`，`publishReport` 继续用
+  `compliance:reports:publish` + step-up（发布闸门不变）。
+
+---
+
 ## [1.3.1] — 2026-05-20
 
 ### Changed

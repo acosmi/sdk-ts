@@ -2,7 +2,9 @@
 //
 // 设计原则（严格）：
 //   - 走独立 base URL（client.complianceURL(path)），不复用 /api/v4 路径。
-//   - GET 走 retryOn401=true（与 agent-runs 同节奏，幂等安全）。
+//   - GET 认证读走 retryOn401=true（与 agent-runs 同节奏，幂等安全）。
+//   - 公开 verify 走 publicRead：无 token 匿名请求，有 token 附带 Authorization 以保留
+//     审计上下文；public 端点不应要求认证 → 401 不触发 forceRefresh，也不做 refresh replay。
 //   - POST 写操作走专属 helper：发送前 ensureToken 一次确保 token fresh；遇到 401
 //     直接抛 HTTPError，不自动重放 — compliance 写接口可能在 provider 侧落幂等写入，
 //     SDK 自动重放会导致 provider 重复请求 / 重复扣费风险。
@@ -144,7 +146,11 @@ export class ComplianceClient {
 
   /**
    * 公开 verify。隐私边界：返回字段不含 PII / 合同原文 / storage / provider raw。
-   * 服务端不要求 compliance scope（公开端点）；但 SDK 仍带上 token 以便审计。
+   *
+   * 匿名可调用：未 login 时走匿名请求，不会抛 `not authorized, call login() first`。
+   * 已 login / 已持有 token 时附带 `Authorization` 以保留审计上下文。public 端点不
+   * 应要求认证 — 收到 401 直接抛 HTTPError，不触发 `forceRefresh`，也不做 refresh
+   * replay。
    */
   verifyEvidencePublic(
     params: { evidenceNo?: string; publicVerifyCode?: string },
@@ -154,10 +160,9 @@ export class ComplianceClient {
     if (params.evidenceNo) q.set('evidenceNo', params.evidenceNo);
     if (params.publicVerifyCode) q.set('publicVerifyCode', params.publicVerifyCode);
     const qs = q.toString();
-    return this.read<PublicEvidenceVerifyResult>(
+    return this.publicRead<PublicEvidenceVerifyResult>(
       'GET',
       `/compliance/evidence/verify${qs ? '?' + qs : ''}`,
-      null,
       signal,
     );
   }
@@ -527,6 +532,50 @@ export class ComplianceClient {
       retryOn401: true,
       extraHeaders,
     });
+  }
+
+  /**
+   * 公开读路径：public verify。
+   *
+   * 与 {@link read} 的区别 — public 端点不应要求认证：
+   *   - 无 token 时匿名请求：ensureToken 抛 `not authorized` 会被吞掉，继续匿名发送。
+   *   - 有 token 时附带 `Authorization`，保留后端审计上下文。
+   *   - 不做 401 refresh replay：401 直接抛 HTTPError，不触发 `forceRefresh`。
+   *
+   * URL 仍走 `client.complianceURL(path)`，不复用 `/api/v4`；底层复用
+   * `client.doRequest`，不新增 fetch/axios 直连。
+   */
+  private async publicRead<T>(
+    method: 'GET' | 'HEAD' | 'OPTIONS',
+    path: string,
+    signal: AbortSignal | undefined,
+  ): Promise<T> {
+    let token = '';
+    try {
+      token = await this.client.ensureToken(signal);
+    } catch {
+      // public 端点允许未授权 — 吞掉 `not authorized`，继续匿名请求。
+    }
+
+    const url = this.client.complianceURL(path);
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const resp = await this.client.doRequest({ method, url, headers }, signal);
+
+    if (resp.status < 200 || resp.status >= 300) {
+      const bodyBytes = resp.body
+        ? await readLimited(resp.body, maxErrorBodySize)
+        : new Uint8Array();
+      throw parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+    }
+
+    const text = await resp.text();
+    if (!text) return undefined as unknown as T;
+    const parsed = JSON.parse(text) as APIResponse<T>;
+    const bizErr = apiResponseBusinessError(parsed);
+    if (bizErr) throw bizErr;
+    return parsed.data;
   }
 
   /**
