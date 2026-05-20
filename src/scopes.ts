@@ -2,7 +2,6 @@
 //
 // 分组 Scope（V2: 10→3 合并），与后端 DesktopOAuthScopes 保持一致。
 //
-// W1 (2026-05-19) 追加: 12 个合规域细粒度 scope。
 // 三处必须字面量一致, 任一变更需同步另外两处:
 //   - Go:  nexus-v4/backend/internal/handler/desktop_oauth.go DesktopOAuthScopes
 //   - Java: tk-dist/yudao-module-compliance-api ComplianceScopes
@@ -35,15 +34,11 @@ export const ScopeWalletReadonly = 'wallet:readonly';
 export const ScopeProfile = 'profile';
 
 // ===========================================================================
-// 合规履约 scope (W1)
+// 合规履约 scope
 // ===========================================================================
 //
-// 本组 scope 只用于 OAuth 授权申请与展示, TS SDK 不直接调用 compliance API —
-// W1 阶段 SDK 不暴露 compliance 业务封装, 仅提供 scope 常量, 避免泄露 CFCA / JKS /
-// P7 / DeviceTLS / Provider 细节到入口层。
-//
-// W3 引入 compliance API 客户端时, 必须按这些常量声明所需 scope; 不允许通过
-// ScopeAI / ScopeAccount 隐式获得 compliance 权限。
+// 调用 compliance API 时必须按这些常量声明所需 scope; 不允许通过 ScopeAI /
+// ScopeAccount 隐式获得 compliance 权限。
 
 export const ScopeComplianceEvidenceRead = 'compliance:evidence:read';
 export const ScopeComplianceEvidenceWrite = 'compliance:evidence:write';
@@ -60,6 +55,7 @@ export const ScopeComplianceSealApprovalApprove = 'compliance:seal_approval:appr
 export const ScopeComplianceSealUseExecute = 'compliance:seal_use:execute';
 
 export const ScopeComplianceReportsRead = 'compliance:reports:read';
+export const ScopeComplianceReportsWrite = 'compliance:reports:write';
 export const ScopeComplianceReportsPublish = 'compliance:reports:publish';
 
 /** 类型联合：合规域细粒度 scope。Java compliance verifier 只按细粒度匹配, 不做分组展开。 */
@@ -75,6 +71,7 @@ export type ComplianceScope =
   | typeof ScopeComplianceSealApprovalApprove
   | typeof ScopeComplianceSealUseExecute
   | typeof ScopeComplianceReportsRead
+  | typeof ScopeComplianceReportsWrite
   | typeof ScopeComplianceReportsPublish;
 
 /** 全部分组 scope (推荐) */
@@ -82,7 +79,7 @@ export function allScopes(): string[] {
   return [ScopeAI, ScopeSkills, ScopeAccount];
 }
 
-/** 全部合规域 scope (W1)。OAuth 申请合规权限时使用; 谨慎一次性申请全部, 推荐按业务最小集合申请。 */
+/** 全部合规域 scope。OAuth 申请合规权限时使用; 谨慎一次性申请全部, 推荐按业务最小集合申请。 */
 export function complianceScopes(): ComplianceScope[] {
   return [
     ScopeComplianceEvidenceRead,
@@ -96,6 +93,7 @@ export function complianceScopes(): ComplianceScope[] {
     ScopeComplianceSealApprovalApprove,
     ScopeComplianceSealUseExecute,
     ScopeComplianceReportsRead,
+    ScopeComplianceReportsWrite,
     ScopeComplianceReportsPublish,
   ];
 }

@@ -1,19 +1,22 @@
-// compliance-status.ts — W3 合规域稳定 API 契约（前端可见的最小集合）。
-//
-// 来源：时间章与电子证据 最终定版架构结论 §13/§15。
+// compliance-status.ts — 合规域稳定 API 契约（前端可见的最小集合）。
 //
 // 设计原则：
-//   - SDK / 插件 / SaaS 不感知 CFCA / JKS / P7 / DeviceTLS / provider request ledger / distribution
-//     billing 内部 API。本文件只暴露面向用户的状态/错误码语义。
-//   - 错误码字面量与 Java compliance ErrorCodeConstants 段位保持一致，前端按字面量判定，
-//     不依赖后端文案。
-//   - W2 / Gate3 未通过时业务入口在后端层关闭：前端拿到 ENVELOPE_GATE_CLOSED / PROVIDER_CFCA_NOT_CONFIGURED
+//   - SDK / 插件 / SaaS 不感知下游履约通道材料或内部流水字段。
+//     本文件只暴露面向用户的状态/错误码语义。
+//   - 本文件导出的错误码常量是 **SDK 内部 symbolic key**，不是 Java 服务端的 wire 错误码。
+//     Java 后端通过 ErrorCodeConstants 暴露的是 1-031-xxx-xxx 数值码；wire 上读到的是
+//     {code: number, message: string}。前端要做分类判断时，使用 `compliance-errors.ts`
+//     的 `classifyComplianceError(BusinessError)` 拿到 ComplianceErrorInfo.key，
+//     再按本文件的 symbolic 常量 switch。本文件常量字面量供 SDK 内部分支判断与文档使用，
+//     不是服务端 wire 字段。
+//   - 业务入口在后端层关闭时，前端拿到 ENVELOPE_GATE_CLOSED / PROVIDER_NOT_CONFIGURED
 //     必须展示"功能未开放"，不得自行重试或绕过。
 
 /**
  * Compliance envelope 稳定业务状态。
  *
- * 与 Java {@code EnvelopeStatusEnum} 字面量一致；前端按这些字符串分支展示文案。
+ * 字面量与 Java {@code EnvelopeStatusEnum} 的 `name()` 一致（这是 enum，是 wire 上的实际
+ * 字符串）；前端按这些字符串分支展示文案。
  */
 export type ComplianceEnvelopeStatus =
   | 'DRAFT'
@@ -36,7 +39,7 @@ export type ComplianceSealApprovalStatus =
   | 'USED'
   | 'EXPIRED';
 
-/** Provider 业务状态（前端可见的脱敏视图，不暴露 CFCA 内部 txCode/business_no）。 */
+/** Provider 业务状态（前端可见的脱敏视图，不暴露下游内部字段）。 */
 export type ComplianceProviderStatus =
   | 'pending'
   | 'success'
@@ -61,11 +64,11 @@ export type ComplianceBillingDisplayStatus =
 /** 高风险动作 step-up — 重新做 OAuth introspection 或重新登录，提升 token 等级后再尝试。 */
 export const ErrComplianceStepUpRequired = 'COMPLIANCE_STEP_UP_REQUIRED';
 
-/** envelope 默认闸门关闭 — W2 Gate2 + 审批 gate 等条件未同时就绪，前端展示"功能开放中"。 */
+/** envelope 闸门关闭 — 审批 gate 等条件未同时就绪，前端展示"功能开放中"。 */
 export const ErrEnvelopeGateClosed = 'ENVELOPE_GATE_CLOSED';
 
-/** CFCA provider 未配置 — 测试环境 / 受控证书缺失，业务路径会一致拒绝，不要前端重试。 */
-export const ErrProviderCfcaNotConfigured = 'PROVIDER_CFCA_NOT_CONFIGURED';
+/** 履约 provider 未配置 — 受控环境材料缺失时业务路径会一致拒绝，不要前端重试。 */
+export const ErrProviderNotConfigured = 'PROVIDER_NOT_CONFIGURED';
 
 /** Provider 返回 unknown / retrying — 客户必须等待对账，前端展示"处理中（人工核对）"。 */
 export const ErrProviderUnknownNoRetry = 'PROVIDER_REQUEST_UNKNOWN_NO_RETRY';
@@ -95,7 +98,7 @@ export const ErrSealUseAlreadyConsumed = 'SEAL_USE_ALREADY_CONSUMED';
 export type ComplianceClientErrorCode =
   | typeof ErrComplianceStepUpRequired
   | typeof ErrEnvelopeGateClosed
-  | typeof ErrProviderCfcaNotConfigured
+  | typeof ErrProviderNotConfigured
   | typeof ErrProviderUnknownNoRetry
   | typeof ErrBillingCallbackCannotCommit
   | typeof ErrBillingCommitRequiresLocalVerify
@@ -116,7 +119,7 @@ export type ComplianceClientErrorCode =
 export function isComplianceTerminalError(code: string): boolean {
   switch (code) {
     case ErrEnvelopeGateClosed:
-    case ErrProviderCfcaNotConfigured:
+    case ErrProviderNotConfigured:
     case ErrProviderUnknownNoRetry:
     case ErrBillingCallbackCannotCommit:
     case ErrBillingCommitRequiresLocalVerify:

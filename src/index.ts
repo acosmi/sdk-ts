@@ -55,10 +55,19 @@ export {
 // === Scopes ===
 export * from './scopes';
 
-// === Compliance (W3 稳定客户端语义) ===
-// 仅暴露 envelope/审批/provider/billing 的对外稳定状态与错误码，
-// 不暴露 CFCA / JKS / P7 / provider ledger / distribution billing 内部 API。
+// === Compliance ===
+// 暴露 envelope/审批/provider/billing 的对外稳定状态与错误码 + SDK 公共领域类型
+// + 数值错误码 → symbolic key 的分类器；不暴露下游材料、provider ledger /
+// distribution billing 内部 API。
 export * from './compliance-status';
+export * from './compliance-types';
+export {
+  classifyComplianceError,
+  isComplianceBusinessError,
+  type ComplianceErrorInfo,
+  type ComplianceErrorKey,
+} from './compliance-errors';
+export { ComplianceClient, CompliancePollError } from './client/compliance';
 
 // === TokenStore ===
 export {
@@ -116,6 +125,7 @@ import './client/skills';
 import './client/tools';
 import './client/notifications';
 import './client/agent-runs';
+import './client/compliance';
 import './sanitize-bridge';
 import './ws';
 import './bug-report';

@@ -7,9 +7,9 @@
 ## 状态
 
 - 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
-- 当前版本：**1.2.0**（新增 `ManagedModel.inputModalities` + `ModelCapabilities.supports_desktop_visual_understanding` + 4 catalog helpers，供 CrabCode desktop automation / computer-use 选模型用；详见 [CHANGELOG](./CHANGELOG.md)）
-- 测试：79/79 vitest 全绿，typecheck/lint/build 0 错误；packed-tarball smoke (`npm run test:pack`) 在 prepublishOnly 闸内
-- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.2.0) · [tarball](https://registry.npmjs.org/@acosmi/sdk-ts/-/sdk-ts-1.2.0.tgz) · [GitHub Release](https://github.com/acosmi/sdk-ts/releases/tag/v1.2.0)
+- 当前版本：**1.3.2**（`verifyEvidencePublic` 匿名公开验真收口、新增 `compliance:reports:write` scope、compliance 方法状态四档分级；`1.3.0` 新增 `client.compliance`、`complianceBaseURL`、合规域 types/errors/status/scopes、示例与文档；详见 [CHANGELOG](./CHANGELOG.md)）
+- 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
+- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
 
 ## 安装
 
@@ -22,7 +22,7 @@ npm install @acosmi/sdk-ts
 ```ts
 import { Client, allScopes } from '@acosmi/sdk-ts';
 
-const client = new Client({ serverURL: 'https://acosmi.com' });
+const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL! });
 await client.login('My App', allScopes());
 
 const resp = await client.chat('claude-opus-4-7', {
@@ -87,7 +87,7 @@ for await (const ev of stream) {
 ```ts
 import { Client, allScopes } from '@acosmi/sdk-ts';
 
-const client = new Client({ serverURL: 'https://acosmi.com' });
+const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL! });
 await client.login('CrabDesign', allScopes());
 
 const run = await client.agentRuns.create({
@@ -155,7 +155,7 @@ const token = await client.ensureToken();      // 拿到当前有效 access toke
 ```ts
 import { discover, register, authorize, exchangeCode } from '@acosmi/sdk-ts';
 
-const meta = await discover('https://acosmi.com');
+const meta = await discover(process.env.ACOSMI_SERVER_URL!);
 const reg = await register(meta, 'My CLI', allScopes());
 const result = await authorize(meta, reg, allScopes(), {
   onEvent: (ev) => console.log(ev.type, ev.url),
@@ -169,7 +169,7 @@ const tokens = await exchangeCode(meta, reg, result.code, result.codeVerifier);
 import { Client, FileTokenStore, LocalStorageTokenStore } from '@acosmi/sdk-ts';
 
 // Node — 默认 ~/.acosmi/tokens.json，可自定义路径
-const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new FileTokenStore('./my-tokens.json') });
+const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: new FileTokenStore('./my-tokens.json') });
 
 // 浏览器 — 自动用 LocalStorage（无 LocalStorage 时退化为内存）
 ```
@@ -190,6 +190,7 @@ const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new Fil
 | **Notifications** | `listNotifications`, `getUnreadCount`, `markNotificationRead`, `registerDevice`, `listNotificationPreferences` |
 | **Bug Report** | `submitBugReport`, `getBugReport`                                                  |
 | **Web Search** | `newWebSearchTool` (factory)                                                       |
+| **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
 
@@ -198,7 +199,7 @@ const client = new Client({ serverURL: 'https://acosmi.com', tokenStore: new Fil
 ```ts
 import { Client } from '@acosmi/sdk-ts';
 
-const client = new Client({ serverURL: 'https://acosmi.com' });
+const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL! });
 
 // 公共端点 — 无需登录
 const result = await client.browseSkills(
@@ -239,7 +240,7 @@ import {
   modelSupportsImageInput,
 } from '@acosmi/sdk-ts';
 
-const client = new Client({ serverURL: 'https://acosmi.com' });
+const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL! });
 const models = await client.listModels();
 
 // 1) 主模型是否能直接吃截图？
@@ -297,15 +298,16 @@ const view = await client.getBugReport(result.feedback_id);
 
 所有方法 `throw` 类型化错误（不是 Go 风格多返回值）：
 
-| 错误类型             | 触发                                         |
-| -------------------- | -------------------------------------------- |
-| `HTTPError`          | 4xx/5xx，含 `status` / `body` / `requestID`  |
-| `NetworkError`       | TCP/DNS/TLS 失败                             |
-| `StreamError`        | SSE 流解析失败                               |
+| 错误类型             | 触发                                                                   |
+| -------------------- | ---------------------------------------------------------------------- |
+| `HTTPError`          | 4xx/5xx，含 `statusCode` / `body` / `type` / `retryAfter`              |
+| `NetworkError`       | TCP/DNS/TLS 失败                                                       |
+| `StreamError`        | SSE 流解析失败                                                         |
 | `AgentRunStreamError` | Agent Runs 流返回 `error` 事件（默认抛出；可设 `throwOnError:false` 自行消费） |
-| `BusinessError`      | 网关返回 `code !== 0`，含 `code` / `bizMsg`  |
-| `RateLimitError`     | 429（含 `retryAfter`）                       |
-| `OrderTerminalError` | `waitForPayment` 终态失败                    |
+| `BusinessError`      | 网关返回 `code !== 0`，含 `code` (number) / `message` (字符串)         |
+| `RateLimitError`     | 429（含 `retryAfter`）                                                 |
+| `OrderTerminalError` | `waitForPayment` 终态失败                                              |
+| `CompliancePollError` | `waitForTimestampVerified` / `waitForProviderRequestTerminal` 终态失败或超时 |
 
 ```ts
 import { HTTPError, BusinessError } from '@acosmi/sdk-ts';
@@ -313,11 +315,152 @@ import { HTTPError, BusinessError } from '@acosmi/sdk-ts';
 try {
   await client.chat(...);
 } catch (e) {
-  if (e instanceof HTTPError && e.status === 401) await client.login(...);
-  if (e instanceof BusinessError) console.error(e.code, e.bizMsg);
+  if (e instanceof HTTPError && e.statusCode === 401) await client.login(...);
+  if (e instanceof BusinessError) console.error(e.code, e.message);
   throw e;
 }
 ```
+
+### Compliance 错误分类
+
+合规域使用 Java 数值错误码（1-031-xxx-xxx），SDK 通过 `classifyComplianceError` 把
+`BusinessError` 映射到 symbolic key，便于分支判断：
+
+```ts
+import { BusinessError, classifyComplianceError, isComplianceBusinessError } from '@acosmi/sdk-ts';
+
+try {
+  await client.compliance.publishReport(reportId, { idempotencyKey });
+} catch (e) {
+  if (e instanceof BusinessError && isComplianceBusinessError(e)) {
+    const info = classifyComplianceError(e);
+    if (info.stepUpRequired) {
+      // 引导用户重新做 OAuth introspection / 重新登录后用同一 idempotency-key 再试
+    } else if (info.terminal) {
+      // 终态错误（gate closed / provider not configured 等），不要 retry，用新 key 重发
+    }
+  }
+  throw e;
+}
+```
+
+## Compliance (时间章 / 电子证据 / 合同签署)
+
+合规域走独立子客户端 `client.compliance.*`，使用独立 base URL。**SDK 永远不接触
+provider endpoint、证书/密钥材料、provider raw payload / callback billing commit**；
+所有 provider 选择由服务端按配置决定，调用方不传 `provider` 字段。
+
+完整 API 指南见 [docs/compliance.md](./docs/compliance.md)。
+
+```ts
+import { Client, complianceScopes } from '@acosmi/sdk-ts';
+
+// 1. 配置 — complianceBaseURL 默认 ${serverURL}/admin-api
+const client = await Client.create({
+  serverURL: process.env.ACOSMI_SERVER_URL!,
+  // complianceBaseURL: process.env.ACOSMI_COMPLIANCE_BASE_URL,  // 独立 ingress 时显式覆盖
+});
+
+// 2. 登录 — OAuth scope 申请按业务最小集合
+await client.login('My App', complianceScopes());
+
+// 3. 申请时间章（写操作；strongly recommended 持久化 idempotency-key）
+const idempotencyKey = `ts-${orderId}-${Date.now()}`;
+await persistKey(idempotencyKey);
+const token = await client.compliance.issueTimestamp(
+  { name: 'release-artifact', hashAlgorithm: 'sha256', digest: sha256Hex },
+  { idempotencyKey },
+);
+
+// 4. 轮询到本地 verify 通过
+const verified = await client.compliance.waitForTimestampVerified(token.id, {
+  timeoutMs: 60_000,
+});
+
+// 5. 公开 verify — 不要求登录、不暴露 PII / 合同原文
+const result = await client.compliance.verifyEvidencePublic({ evidenceNo: 'EV-001' });
+console.log(result.manifestOfflineVerify);
+```
+
+### 公开 verify 匿名语义
+
+`verifyEvidencePublic` 可匿名调用：未 `login()` 时 SDK 直接发匿名请求，不会抛
+`not authorized, call login() first`。客户端已持有 token 时请求会附带 `Authorization`，
+便于后端保留审计上下文。与认证 GET 读不同，public verify 收到 `401` 不会触发
+`forceRefresh`、不做 refresh replay。
+
+### 写操作幂等与 401 策略
+
+合规域写操作有别于普通 API：
+
+- **Idempotency-Key**：所有 POST 写操作支持 `Idempotency-Key` header；调用方必须**持久化**
+  key（重启后仍可用）。同一 key 重发等价于"对账查询同一业务结果"，避免 provider 侧重复
+  请求 / 重复扣费。
+- **401 不自动重放**：写操作 401 直接抛 `HTTPError`，**不会自动 refresh + replay**。
+  调用方需要重新登录后用**同一 idempotency-key** 调用同一方法。GET 读操作仍走单次 401
+  refresh 重试。
+- **5xx / timeout 不自动重试**：合规域写操作完全禁用自动重试。
+- **step-up 错误（`COMPLIANCE_STEP_UP_REQUIRED`，code=1031000013）**：通过
+  `classifyComplianceError` 识别后引导用户重新做 OAuth introspection / 升级 token 等级。
+- **gate closed / provider not configured / unknown**：terminal 错误，禁止自动重发原请求。
+
+### 隐私边界
+
+`verifyEvidencePublic` 返回字段：`evidenceNo` / `assetType` / `hashAlgorithm` / `contentHash` /
+`size` / `manifestHash` / `packageHash` / `manifestOfflineVerify` / `verifiedAt`。**不暴露**
+PII / 合同原文 / storage bucket+key / subject snapshot / provider raw / TSA 证书内部字段。
+
+### 完整 API 列表
+
+```ts
+client.compliance.createEvidenceAsset(req, options?)
+client.compliance.getEvidenceAsset(id, signal?)
+client.compliance.verifyEvidencePublic(req, signal?)
+
+client.compliance.issueTimestamp(req, options?)
+client.compliance.issueTimestampForAsset(assetId, options?)
+client.compliance.getTimestamp(id, signal?)
+client.compliance.verifyTimestamp(req, options?)
+client.compliance.waitForTimestampVerified(id, opts?)
+
+client.compliance.buildEvidencePackage(assetId, timestampTokenId?, options?)
+
+client.compliance.createReport(req, options?)    // 需 compliance:reports:write
+client.compliance.getReport(id, signal?)
+client.compliance.publishReport(id, options?)    // step-up
+client.compliance.downloadReport(id, signal?)    // 离线复核 hash 视图
+
+client.compliance.createSigningEnvelope(req, options?)
+client.compliance.getSigningEnvelope(envelopeId, signal?)
+client.compliance.signEnvelope(envelopeId, req, options?)            // step-up + gate
+client.compliance.createH5SigningUrl(envelopeId, req, options?)      // step-up + gate
+client.compliance.syncSigningEnvelopeStatus(envelopeId, options?)
+
+client.compliance.submitSealApproval(req, options?)
+client.compliance.approveSealApproval(id, query, options?) // step-up
+client.compliance.rejectSealApproval(id, query, options?)
+client.compliance.cancelSealApproval(id, query, options?)
+client.compliance.listPendingSealApprovals(signal?)
+client.compliance.getSealApproval(id, signal?)
+
+client.compliance.getProviderRequest(id, signal?)
+client.compliance.waitForProviderRequestTerminal(id, opts?)
+```
+
+### 示例
+
+`examples/` 下提供 3 份可直接运行的端到端示例，并随 npm 包一起发布：
+
+- `examples/compliance-read.ts` — 只读 / public verify 流程
+- `examples/compliance-evidence-timestamp.ts` — hash-only evidence + timestamp + package 链路
+- `examples/compliance-envelope.ts` — envelope 创建 / 错误正确处理（step-up / gate closed）
+
+### 后端边界
+
+- Java compliance 后端负责 provider 集成、受控材料、provider raw payload、local verify、
+  billing 状态机和对外 public DTO 收敛。
+- Go OAuth/JWKS 层负责 token 签发、scope 与 step-up/introspection 语义。
+- TS SDK 只申请 scope、发送公共 DTO、传递 `Idempotency-Key`、分类公开错误码并轮询脱敏状态视图。
 
 ## AbortSignal
 
@@ -346,7 +489,11 @@ npm run build
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 1.1.0 | 当前稳定版 | 新增 SDK-facing `agentRuns` 网关客户端，覆盖 create/stream/cancel/get/artifacts/local-tool-result，并提供本地只读工具桥协议。 |
+| 1.3.2 | 当前稳定版 | `verifyEvidencePublic` 匿名公开验真链路收口（未登录不抛 `not authorized`）；新增第 13 个 compliance scope `compliance:reports:write`（创建出证报告改用写 scope）；`docs/compliance.md` 新增方法状态四档分级（production-ready / gated / draft contract / internal-only）。 |
+| 1.3.1 | 稳定版 | 修订 npm 包短介绍与搜索关键词，明确模型网关、Agent Run Gateway 与 Compliance 统一客户端定位。 |
+| 1.3.0 | 稳定版 | 新增 compliance SDK client、base URL、types/errors/status/scopes、docs/examples/tests，并明确 idempotency/no-retry/no-401-replay 与 provider material 安全边界。 |
+| 1.2.0 | 稳定版 | 新增 `ManagedModel.inputModalities`、桌面视觉理解 sidecar capability 与 4 个 catalog helpers。 |
+| 1.1.0 | 稳定版 | 新增 SDK-facing `agentRuns` 网关客户端，覆盖 create/stream/cancel/get/artifacts/local-tool-result，并提供本地只读工具桥协议。 |
 | 1.0.2 | 稳定版 | 修复多进程共享 token refresh rotation 竞态。 |
 | 1.0.1 | 历史稳定版 | 修复 1.0.0 双层 broken packaging:tsup 输出 `.mjs+.cjs` 与 exports 字段对齐;9 处 `declare module` 绑包名 `@acosmi/sdk-ts` 让 d.ts augmentation 在 consumer 视角合并;prepublishOnly 加 packed-tarball 烟测拦截"源码过 / 打包后 broken"。 |
 | 1.0.0 | **deprecated** | 双层 broken:(1) `package.json.exports` 8 处 `.mjs` 引用与 tsup 默认 `.js+.cjs` 错位 → bun/Node ESM `Cannot find module`;(2) 9 处 `declare module` 用相对路径,consumer 视角断链 → 50+ 方法 TS2339。`npm install @acosmi/sdk-ts` 自动跳到 1.0.1。 |

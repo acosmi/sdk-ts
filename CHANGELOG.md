@@ -5,6 +5,105 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+---
+
+## [1.3.2] — 2026-05-20
+
+> 生产闭环实施计划（`Acosmi-Compliance-SDK-Csign-PC-CrabCode-生产闭环实施计划-2026-05-20`）
+> Phase 1 / Phase 5 / Phase 7 的 SDK 侧收口版本。
+
+### Added
+
+- **`ScopeComplianceReportsWrite`（`compliance:reports:write`）** — 新增第 13 个
+  细粒度 compliance scope，专用于创建出证报告。`complianceScopes()` 已包含该 scope，
+  字面量与 Go `DesktopOAuthScopes` / `ScopesSupported`、Java `ComplianceScopes`
+  三端一致。
+- **Compliance 方法状态分级** — `docs/compliance.md` 新增「Method Status」一节，
+  把每个 `client.compliance.*` 方法标注为 `production-ready` / `gated` /
+  `draft contract` / `internal-only` 四档；`gated`（`publishReport` / `signEnvelope` /
+  `createH5SigningUrl` / `approveSealApproval`）在服务端 step-up / 闸门未闭合前会
+  一致 fail-closed，SDK 不重试、不伪成功。`internal-only`（distribution billing /
+  provider raw / callback / CFCA 材料）不在 SDK 调用面。
+
+### Changed
+
+- **创建出证报告需要新 scope** — `client.compliance.createReport` 对应的服务端
+  scope 从 `compliance:reports:read` 切换到独立的写 scope
+  `compliance:reports:write`。调用 `createReport` 的应用必须在 `login()` 时申请
+  `ScopeComplianceReportsWrite`；在该 scope 发布前签发的旧 token 不含此 scope，
+  存量用户需重新走一次 OAuth 授权流程才能继续创建报告。`getReport` /
+  `downloadReport` 继续用 `compliance:reports:read`，`publishReport` 继续用
+  `compliance:reports:publish` + step-up（发布闸门不变）。
+- **`verifyEvidencePublic` 可匿名调用** — 公开验真不再要求先 `login()`：未持有
+  token 时 SDK 直接发匿名请求，不再抛 `not authorized, call login() first`；已持有
+  token 时附带 `Authorization` 以保留审计上下文。public 端点收到 `401` 不触发
+  `forceRefresh`、不做 refresh replay。
+
+### Safety
+
+- 公开验真匿名链路与认证写链路边界保持不变：写方法仍不自动 retry、401 不刷新重放；
+  匿名 public verify 不复用 `/api/v4`，走 `client.complianceURL(path)`。
+
+---
+
+## [1.3.1] — 2026-05-20
+
+### Changed
+
+- 修订 npm 包短介绍和搜索关键词，明确 SDK 同时覆盖模型网关、
+  Agent Run Gateway 与 Compliance（电子证据、时间章、报告、签署 envelope）
+  统一客户端能力。
+
+---
+
+## [1.3.0] — 2026-05-20
+
+### Added
+
+- **Compliance SDK client** — 新增 `client.compliance` 子客户端，覆盖电子证据、
+  时间章、证据包、报告、签署 envelope、用印审批和 provider request 脱敏状态轮询。
+- **`Config.complianceBaseURL` / `Client.complianceURL(path)`** — compliance API 使用
+  独立 base URL，未配置时默认 `${serverURL}/admin-api`，不复用既有 `/api/v4`
+  模型网关路径。
+- **Compliance public types** — 新增 `src/compliance-types.ts`，只暴露 Acosmi 公共领域
+  DTO；不包含 provider product/user/transaction/project/seal-provider 字段，不包含证书、
+  私钥、keystore、provider raw payload、storage key、subject snapshot 或 billing commit 内部字段。
+- **Compliance error classification** — 新增 `src/compliance-errors.ts`，把 Java 数值业务错误码
+  映射到 SDK symbolic key，并提供 `classifyComplianceError` / `isComplianceBusinessError`。
+- **Compliance status helpers** — 新增稳定状态与错误码辅助函数，供前端区分 step-up、
+  gate closed、provider not configured、local verify failed、billing not committable 等状态。
+- **Compliance scopes** — 新增 12 个细粒度 compliance scope 常量和 `complianceScopes()`。
+- **Examples and docs** — 新增 `docs/compliance.md` 以及 3 个示例：
+  `examples/compliance-read.ts`、`examples/compliance-evidence-timestamp.ts`、
+  `examples/compliance-envelope.ts`。
+- **Tests** — 新增 compliance client 与 compliance scopes 单元测试，覆盖 URL 拼接、
+  `Authorization`、`Idempotency-Key`、GET 401 refresh retry、write no-retry/no-401-replay、
+  CommonResult 解包、数值错误码分类、隐私边界和 polling 终态。
+
+### Changed
+
+- `README.md` 增加 compliance 快速开始、scope 申请、base URL 配置、evidence +
+  timestamp/report 示例、provider request polling、step-up/gate closed 错误处理、
+  idempotency key 持久化和安全禁止项说明。
+- Packed tarball smoke test 覆盖 `client.compliance`，确保 consumer 视角能解析新增
+  declaration merging 和导出的 compliance 类型。
+- `package.json.files` 现在包含 `docs/compliance.md` 和 `examples/`，npm 包随附用户文档
+  与可运行示例；开发手册仍保留在仓库中，不随包发布。
+
+### Safety
+
+- Compliance write methods do not auto retry and do not refresh/replay on 401.
+  GET read methods still allow one safe 401 refresh retry.
+- All compliance write methods accept `Idempotency-Key` through `ComplianceWriteOptions`；
+  callers should persist keys and reuse the same key when resuming the same business action.
+- SDK code, docs, tests, examples, and package files do not include provider materials,
+  credentials, real provider endpoints, signing containers, archives, jars, passwords,
+  or raw provider payloads.
+
+---
+
 ## [1.2.0] — 2026-05-18
 
 ### Added
@@ -152,6 +251,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 36/36 vitest 全绿,源码 typecheck/lint/build 0 错误
 - 翻车机制:`prepublishOnly` 仅跑源码 typecheck/vitest/build,不验证 packed product 在 consumer 视角能否解析
 
+[1.3.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.1
+[1.3.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.0
+[1.2.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.2.0
 [1.1.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.1.0
 [1.0.2]: https://github.com/acosmi/sdk-ts/releases/tag/v1.0.2
 [1.0.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.0.1

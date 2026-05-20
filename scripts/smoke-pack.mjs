@@ -69,7 +69,12 @@ try {
   run(npmBin, ['i', '-D', 'typescript'], tmpDir);
 
   // 4. smoke.ts: 用包名 import + 调 augmentation method (覆盖各 declare module 文件至少一个)
-  const smokeContent = `import { Client } from '${pkgName}';
+  const smokeContent = `import {
+  BusinessError,
+  Client,
+  classifyComplianceError,
+  complianceScopes,
+} from '${pkgName}';
 
 declare const c: Client;
 
@@ -91,6 +96,18 @@ c.agentRuns.submitLocalToolResult('run_1', { requestId: 'local_1', ok: false, er
 c.agentRuns.runWithLocalTools({ appId: 'app', input: 'hi' }, {
   read_file: async (_input, ctx) => ({ requestId: ctx.requestId })
 });
+c.compliance.createEvidenceAsset({
+  assetType: 'HASH_ONLY',
+  name: 'artifact',
+  hashAlgorithm: 'sha256',
+  declaredHash: 'abc123',
+}, { idempotencyKey: 'asset-1' });
+c.compliance.getEvidenceAsset(1);
+c.compliance.issueTimestamp({ hashAlgorithm: 'sha256', digest: 'abc123' }, { idempotencyKey: 'ts-1' });
+c.compliance.waitForTimestampVerified(1);
+c.compliance.getProviderRequest(1);
+const _complianceScopes = complianceScopes();
+const _complianceInfo = classifyComplianceError(new BusinessError(1031000013, 'step up'));
 c.submitBugReport({});                // bug-report.ts
 c.applyRequestSanitizers({} as any);  // sanitize-bridge.ts
 // ws.ts: 仅验证类型存在 (实际调用涉及 WebSocket 真连接, smoke 不跑)
@@ -98,6 +115,8 @@ const _wsConnect: typeof c.connect | undefined = undefined;
 const _wsIsConnected: typeof c.isConnected | undefined = undefined;
 void _wsConnect;
 void _wsIsConnected;
+void _complianceScopes;
+void _complianceInfo;
 `;
   writeFileSync(join(tmpDir, 'smoke.ts'), smokeContent);
 

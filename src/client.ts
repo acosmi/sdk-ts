@@ -123,6 +123,18 @@ export interface Config {
    * 计费安全: 自定义 SafeToRetry 时, 严禁让 POST chat/messages 通过, 否则双扣
    */
   retryPolicy?: RetryPolicy;
+
+  /**
+   * Compliance (时间章 / 电子证据 / 合同签署) API 根地址。
+   *
+   * Java compliance 模块的 controller 注册在 `/compliance/...` 下，部署到
+   * `/admin-api/*` 前缀。未配置时默认 `${serverURL}/admin-api`，也可显式覆盖到
+   * 独立 ingress（如 `https://compliance.example.com`）。
+   *
+   * 该地址不被 `/api/v4` 拼接路径复用，compliance 调用走自己的子 client
+   * `client.compliance.*`，不与既有模型网关 API 冲突。
+   */
+  complianceBaseURL?: string;
 }
 
 // =============================================================================
@@ -171,6 +183,8 @@ export class Client {
 
   /** 服务器根地址 (已 trim 尾随 /) */
   serverURL: string;
+  /** Compliance API 根地址 (已 trim 尾随 /); null = 走默认 ${serverURL}/admin-api */
+  complianceBaseURL: string | null;
   /** OAuth metadata (lazy loaded) */
   meta: ServerMetadata | null = null;
   /** 当前 token (内存) */
@@ -212,6 +226,9 @@ export class Client {
 
   constructor(cfg: Config = {}) {
     this.serverURL = (cfg.serverURL ?? 'https://acosmi.com').replace(/\/+$/, '');
+    this.complianceBaseURL = cfg.complianceBaseURL
+      ? cfg.complianceBaseURL.replace(/\/+$/, '')
+      : null;
     this.store = cfg.store ?? defaultTokenStore();
     this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.retryPolicy = effectivePolicy(cfg.retryPolicy ?? null);
@@ -1163,6 +1180,20 @@ export class Client {
     return base + path;
   }
 
+  /**
+   * Compliance API URL 拼接。
+   *
+   * `complianceBaseURL` 已配置时直接拼接；未配置时默认
+   * `${serverURL}/admin-api` + path，匹配 Java compliance controller 的
+   * `/compliance/...` 路径。
+   *
+   * 不复用 `apiURL`：apiURL 强制追加 `/api/v4`，与 compliance 路径不同。
+   */
+  complianceURL(path: string): string {
+    const base = this.complianceBaseURL ?? this.serverURL + '/admin-api';
+    return base + path;
+  }
+
   /** GET/POST/... 通用 JSON 调用 (返回 result 已 typed) */
   async doJSON<T>(
     method: string,
@@ -1544,4 +1575,3 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
   });
 }
-
