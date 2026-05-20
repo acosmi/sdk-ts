@@ -1,6 +1,5 @@
 src/
 test/
-docs/
 node_modules/
 *.config.ts
 *.config.cjs
