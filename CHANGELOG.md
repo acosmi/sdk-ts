@@ -5,6 +5,16 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-05-20
+
+### Changed
+
+- 修订 npm 包短介绍和搜索关键词，明确 SDK 同时覆盖模型网关、
+  Agent Run Gateway 与 Compliance（电子证据、时间章、报告、签署 envelope）
+  统一客户端能力。
+
+---
+
 ## [1.3.0] — 2026-05-20
 
 ### Added
@@ -198,6 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 36/36 vitest 全绿,源码 typecheck/lint/build 0 错误
 - 翻车机制:`prepublishOnly` 仅跑源码 typecheck/vitest/build,不验证 packed product 在 consumer 视角能否解析
 
+[1.3.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.1
 [1.3.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.0
 [1.2.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.2.0
 [1.1.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.1.0
