@@ -152,7 +152,26 @@ export interface Config {
    * `login()` 桌面 loopback 路径不受此配置影响。
    */
   oauthMetadataProfile?: OAuthMetadataProfile;
+
+  /**
+   * Browser refresh strategy for Web OAuth tokens.
+   *
+   * - `'direct'` (default): refresh directly against the OAuth token endpoint.
+   * - `'server-proxy'`: POST the current TokenSet to a same-origin refresh proxy,
+   *   useful when the OAuth issuer intentionally blocks browser CORS.
+   * - `'none'`: do not refresh automatically; expired tokens throw `token_expired`.
+   */
+  browserRefreshMode?: BrowserRefreshMode;
+
+  /** Same-origin refresh proxy URL used when `browserRefreshMode='server-proxy'`. */
+  refreshProxyURL?: string;
 }
+
+export type BrowserRefreshMode = 'direct' | 'server-proxy' | 'none';
+
+export const ErrOAuthCORSBlocked = 'oauth_cors_blocked' as const;
+export const ErrRefreshProxyFailed = 'refresh_proxy_failed' as const;
+export const ErrTokenExpired = 'token_expired' as const;
 
 // =============================================================================
 // 内部 Deferred / WS state
@@ -204,6 +223,10 @@ export class Client {
   complianceBaseURL: string | null;
   /** OAuth metadata profile — 刷新 token 时发现 metadata 用 (默认 'desktop') */
   oauthMetadataProfile: OAuthMetadataProfile;
+  /** Browser Web OAuth refresh strategy (default 'direct') */
+  browserRefreshMode: BrowserRefreshMode;
+  /** Same-origin refresh proxy URL for browserRefreshMode='server-proxy' */
+  refreshProxyURL: string | null;
   /** OAuth metadata (lazy loaded) */
   meta: ServerMetadata | null = null;
   /** 当前 token (内存) */
@@ -249,6 +272,8 @@ export class Client {
       ? cfg.complianceBaseURL.replace(/\/+$/, '')
       : null;
     this.oauthMetadataProfile = cfg.oauthMetadataProfile ?? 'desktop';
+    this.browserRefreshMode = cfg.browserRefreshMode ?? 'direct';
+    this.refreshProxyURL = cfg.refreshProxyURL ?? null;
     this.store = cfg.store ?? defaultTokenStore();
     this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.retryPolicy = effectivePolicy(cfg.retryPolicy ?? null);
@@ -549,29 +574,7 @@ export class Client {
           return this.tokens.access_token;
         }
 
-        if (this.meta == null) {
-          try {
-            this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
-          } catch (e) {
-            throw new Error(
-              `discover for refresh: ${e instanceof Error ? e.message : String(e)}`,
-            );
-          }
-        }
-
-        let tokenResp;
-        try {
-          tokenResp = await refreshToken(this.meta, this.tokens.client_id, this.tokens.refresh_token, signal);
-        } catch (e) {
-          throw new Error(`refresh token: ${e instanceof Error ? e.message : String(e)}`);
-        }
-
-        this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
-        try {
-          await this.store.save(this.tokens);
-        } catch (e) {
-          console.warn(`[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`);
-        }
+        await this.refreshCurrentToken(signal);
 
         return this.tokens.access_token;
       }),
@@ -589,26 +592,122 @@ export class Client {
         if (this.tokens == null) {
           throw new Error('no tokens to refresh');
         }
-        if (this.meta == null) {
-          // token-lifecycle discovery: refresh 必须打与签发 token 同 profile 的端点
-          this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
-        }
-        const tokenResp = await refreshToken(
-          this.meta,
-          this.tokens.client_id,
-          this.tokens.refresh_token,
-          signal,
-        );
-        this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
-        try {
-          await this.store.save(this.tokens);
-        } catch (e) {
-          console.warn(
-            `[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        }
+        await this.refreshCurrentToken(signal);
       }),
     );
+  }
+
+  private async refreshCurrentToken(signal?: AbortSignal): Promise<void> {
+    if (this.tokens == null) {
+      throw new Error('no tokens to refresh');
+    }
+    if (this.browserRefreshMode === 'none') {
+      throw new Error(`${ErrTokenExpired}: token refresh disabled`);
+    }
+    if (this.browserRefreshMode === 'server-proxy') {
+      await this.refreshCurrentTokenViaProxy(signal);
+      return;
+    }
+    await this.refreshCurrentTokenDirect(signal);
+  }
+
+  private async refreshCurrentTokenDirect(signal?: AbortSignal): Promise<void> {
+    if (this.tokens == null) {
+      throw new Error('no tokens to refresh');
+    }
+    if (this.meta == null) {
+      try {
+        // token-lifecycle discovery: refresh 必须打与签发 token 同 profile 的端点
+        this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
+      } catch (e) {
+        throw new Error(
+          `discover for refresh: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
+    let tokenResp;
+    try {
+      tokenResp = await refreshToken(
+        this.meta,
+        this.tokens.client_id,
+        this.tokens.refresh_token,
+        signal,
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (isLikelyBrowserOAuthCORSError(message)) {
+        throw new Error(`${ErrOAuthCORSBlocked}: refresh token: ${message}`);
+      }
+      throw new Error(`refresh token: ${message}`);
+    }
+
+    this.tokens = newTokenSet(tokenResp, this.tokens.client_id, this.serverURL);
+    await this.saveRefreshedToken();
+  }
+
+  private async refreshCurrentTokenViaProxy(signal?: AbortSignal): Promise<void> {
+    if (this.tokens == null) {
+      throw new Error('no tokens to refresh');
+    }
+    if (!this.refreshProxyURL) {
+      throw new Error(`${ErrRefreshProxyFailed}: refreshProxyURL is required`);
+    }
+
+    let resp: Response;
+    try {
+      resp = await this.fetchImpl(this.refreshProxyURL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: this.tokens.client_id,
+          refresh_token: this.tokens.refresh_token,
+          server_url: this.tokens.server_url || this.serverURL,
+        }),
+        signal,
+      });
+    } catch (e) {
+      throw new Error(
+        `${ErrRefreshProxyFailed}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+
+    if (!resp.ok) {
+      let message = '';
+      try {
+        const body = (await resp.json()) as { error?: unknown };
+        if (typeof body.error === 'string') message = body.error;
+      } catch {
+        // ignore non-JSON proxy errors
+      }
+      throw new Error(`${ErrRefreshProxyFailed}: HTTP ${resp.status}: ${message}`);
+    }
+
+    let body: { tokenSet?: TokenSet };
+    try {
+      body = (await resp.json()) as { tokenSet?: TokenSet };
+    } catch (e) {
+      throw new Error(
+        `${ErrRefreshProxyFailed}: decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    if (!isTokenSetLike(body.tokenSet)) {
+      throw new Error(`${ErrRefreshProxyFailed}: response missing tokenSet`);
+    }
+
+    this.tokens = body.tokenSet;
+    await this.saveRefreshedToken();
+  }
+
+  private async saveRefreshedToken(): Promise<void> {
+    if (this.tokens == null) return;
+    try {
+      await this.store.save(this.tokens);
+    } catch (e) {
+      console.warn(
+        `[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /** 互斥锁 helper (替代 Go sync.Mutex) */
@@ -1501,6 +1600,29 @@ function defaultTokenStore(): TokenStore {
     }
   }
   return new InMemoryTokenStore();
+}
+
+function isLikelyBrowserOAuthCORSError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('failed to fetch') ||
+    lower.includes('networkerror') ||
+    lower.includes('cors') ||
+    lower.includes('http 403')
+  );
+}
+
+function isTokenSetLike(value: unknown): value is TokenSet {
+  if (value == null || typeof value !== 'object') return false;
+  const candidate = value as Partial<TokenSet>;
+  return (
+    typeof candidate.access_token === 'string' &&
+    typeof candidate.refresh_token === 'string' &&
+    typeof candidate.expires_at === 'string' &&
+    typeof candidate.scope === 'string' &&
+    typeof candidate.client_id === 'string' &&
+    typeof candidate.server_url === 'string'
+  );
 }
 
 function zeroModelCapabilities(): ModelCapabilities {

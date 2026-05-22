@@ -117,7 +117,15 @@ export { AgentRunsClient } from './client/agent-runs';
 export { buildBetas, uniqueMerge } from './betas';
 
 // === Client + 业务 mixins (必须 side-effect import 才能挂 prototype) ===
-export { Client, type Config, type FilterStatus } from './client';
+export {
+  Client,
+  ErrOAuthCORSBlocked,
+  ErrRefreshProxyFailed,
+  ErrTokenExpired,
+  type BrowserRefreshMode,
+  type Config,
+  type FilterStatus,
+} from './client';
 export {
   FilterStatusOK,
   FilterStatusAdminBypass,

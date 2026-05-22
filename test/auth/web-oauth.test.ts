@@ -16,6 +16,8 @@ import {
   createWebAuthorizationRequest,
   completeWebAuthorizationRequest,
   Client,
+  ErrRefreshProxyFailed,
+  ErrTokenExpired,
   InMemoryTokenStore,
   type ServerMetadata,
   type TokenSet,
@@ -409,6 +411,116 @@ describe('Client oauthMetadataProfile — refresh metadata discovery', () => {
     expect(wellKnownUrls[0]).toBe(
       'https://acosmi.com/.well-known/oauth-authorization-server/desktop',
     );
+  });
+});
+
+describe('Client browserRefreshMode', () => {
+  function makeExpiredTokenSet(): TokenSet {
+    return {
+      access_token: 'AT-stale',
+      refresh_token: 'RT-stale',
+      expires_at: new Date(Date.now() - 10_000).toISOString(),
+      scope: 'ai',
+      client_id: 'web-client-123',
+      server_url: 'https://acosmi.com',
+    };
+  }
+
+  it("browserRefreshMode:'server-proxy' refreshes through the configured same-origin proxy", async () => {
+    const seenUrls: string[] = [];
+    let seenBody: Record<string, unknown> = {};
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      seenUrls.push(url);
+      seenBody = JSON.parse((init?.body as string) ?? '{}');
+      if (url === '/api/csign/auth/refresh') {
+        return jsonResponse({
+          tokenSet: {
+            access_token: 'AT-proxy-refreshed',
+            refresh_token: 'RT-proxy-refreshed',
+            expires_at: new Date(Date.now() + 3600_000).toISOString(),
+            scope: 'ai',
+            client_id: 'web-client-123',
+            server_url: 'https://acosmi.com',
+          },
+        });
+      }
+      return new Response('not-found', { status: 404 });
+    }) as typeof fetch;
+
+    const c = new Client({
+      serverURL: 'https://acosmi.com',
+      store: new InMemoryTokenStore(),
+      browserRefreshMode: 'server-proxy',
+      refreshProxyURL: '/api/csign/auth/refresh',
+      oauthMetadataProfile: 'web',
+    });
+    c.tokens = makeExpiredTokenSet();
+
+    const at = await c.ensureToken();
+    expect(at).toBe('AT-proxy-refreshed');
+    expect(c.getTokenSet()?.refresh_token).toBe('RT-proxy-refreshed');
+    expect(seenUrls).toEqual(['/api/csign/auth/refresh']);
+    expect(seenBody).toEqual({
+      client_id: 'web-client-123',
+      refresh_token: 'RT-stale',
+      server_url: 'https://acosmi.com',
+    });
+  });
+
+  it("browserRefreshMode:'server-proxy' requires refreshProxyURL", async () => {
+    const c = new Client({
+      serverURL: 'https://acosmi.com',
+      store: new InMemoryTokenStore(),
+      browserRefreshMode: 'server-proxy',
+    });
+    c.tokens = makeExpiredTokenSet();
+
+    await expect(c.ensureToken()).rejects.toThrow(ErrRefreshProxyFailed);
+  });
+
+  it("browserRefreshMode:'server-proxy' is also used by forceRefresh", async () => {
+    const seenUrls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      seenUrls.push(url);
+      return jsonResponse({
+        tokenSet: {
+          access_token: 'AT-force-proxy',
+          refresh_token: 'RT-force-proxy',
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+          scope: 'ai',
+          client_id: 'web-client-123',
+          server_url: 'https://acosmi.com',
+        },
+      });
+    }) as typeof fetch;
+
+    const c = new Client({
+      serverURL: 'https://acosmi.com',
+      store: new InMemoryTokenStore(),
+      browserRefreshMode: 'server-proxy',
+      refreshProxyURL: '/api/csign/auth/refresh',
+    });
+    c.tokens = {
+      ...makeExpiredTokenSet(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    };
+
+    await c.forceRefresh();
+    expect(c.getTokenSet()?.access_token).toBe('AT-force-proxy');
+    expect(seenUrls).toEqual(['/api/csign/auth/refresh']);
+  });
+
+  it("browserRefreshMode:'none' does not refresh expired tokens", async () => {
+    const c = new Client({
+      serverURL: 'https://acosmi.com',
+      store: new InMemoryTokenStore(),
+      browserRefreshMode: 'none',
+    });
+    c.tokens = makeExpiredTokenSet();
+
+    await expect(c.ensureToken()).rejects.toThrow(ErrTokenExpired);
   });
 });
 
