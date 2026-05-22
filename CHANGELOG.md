@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-1
+> compliance gateway S1**：6 个 compliance 分页列表方法，对接已合并的后端
+> **G1** 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；8 个
+> 占位命名空间维持 `export {}`；`typecheck` / `lint` / `vitest`(168, +11) /
+> `build` / `test:pack` / `docs` 全绿。
+
+### Added
+
+- **`client.compliance.list*` 6 个分页列表读方法**（compliance gateway S1 /
+  缺口总账 U-1）——对接后端 G1 的 6 个 `GET .../page` 端点，均返回 yudao
+  `PageResult<T>`（`{ total, list }`，沿用 v1.5.0 `src/shared/pagination.ts`
+  的 `PageResult` 别名，不引入第二套分页结果结构）：
+  - `listEvidenceAssets(req?, signal?)` — `GET /compliance/evidence/assets/page`，
+    过滤项 `assetType` / `status` / `createTimeStart` / `createTimeEnd`。
+  - `listTimestamps(req?, signal?)` — `GET /compliance/timestamps/page`，过滤项
+    `provider` / `verificationStatus` / `createTimeStart` / `createTimeEnd`。
+  - `listEvidencePackages(req?, signal?)` — `GET /compliance/evidence/packages/page`，
+    过滤项 `status` / `createTimeStart` / `createTimeEnd`。
+  - `listReports(req?, signal?)` — `GET /compliance/reports/page`，过滤项
+    `status` / `createTimeStart` / `createTimeEnd`。
+  - `listSigningEnvelopes(req?, signal?)` — `GET /compliance/signing-envelopes/page`，
+    过滤项 `status` / `createTimeStart` / `createTimeEnd`。
+  - `listSealApprovals(req?, signal?)` — `GET /compliance/seal-approvals/page`，
+    过滤项 `status` / `createTimeStart` / `createTimeEnd`（与不分页的
+    `listPendingSealApprovals` 区分：本方法支持分页与状态 / 时间过滤）。
+- **6 个 `*PageItem` 列表项类型 + 6 个 `List*Request` 请求类型**——按子域归位
+  （缺口总账 §9.5）：`EvidenceAssetPageItem` / `EvidencePackagePageItem` /
+  `ListEvidenceAssetsRequest` / `ListEvidencePackagesRequest` 入
+  `compliance/evidence/types.ts`；`TimestampPageItem` / `ListTimestampsRequest`
+  入 `compliance/timestamp/types.ts`；`ReportPageItem` / `ListReportsRequest`
+  入 `compliance/report/types.ts`；`SigningEnvelopePageItem` /
+  `ListSigningEnvelopesRequest` 入 `compliance/signing/types.ts`；
+  `SealApprovalPageItem` / `ListSealApprovalsRequest` 入
+  `compliance/seal-approval/types.ts`。所有 `List*Request` 继承共享
+  `PageRequest`（`pageNo` / `pageSize` / `sortBy` / `sortDirection`）。
+  `*PageItem` 是对应详情视图的 SDK-safe 子集 + `createTime`（ISO-8601）；
+  不含任何 provider raw / 证书密钥 / storage / 合同原文字段。
+- **GET 读语义**：6 个 list 方法走既有 compliance GET 读路径——`401` 单次安全
+  刷新重放、不禁用。
+- `createTimeStart` / `createTimeEnd` 为调用方提供的【原样字符串】，后端按
+  `yyyy-MM-dd HH:mm:ss` 解析；SDK 不做格式校验或时区转换，原样透传查询参数。
+
+---
+
 ## [1.5.0] — 2026-05-22
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
