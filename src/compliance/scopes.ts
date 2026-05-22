@@ -29,6 +29,9 @@ export const ScopeComplianceReportsRead = 'compliance:reports:read';
 export const ScopeComplianceReportsWrite = 'compliance:reports:write';
 export const ScopeComplianceReportsPublish = 'compliance:reports:publish';
 
+export const ScopeComplianceContractTemplateRead = 'compliance:contract_template:read';
+export const ScopeComplianceContractTemplateWrite = 'compliance:contract_template:write';
+
 /** 类型联合：合规域细粒度 scope。Java compliance verifier 只按细粒度匹配, 不做分组展开。 */
 export type ComplianceScope =
   | typeof ScopeComplianceEvidenceRead
@@ -43,7 +46,9 @@ export type ComplianceScope =
   | typeof ScopeComplianceSealUseExecute
   | typeof ScopeComplianceReportsRead
   | typeof ScopeComplianceReportsWrite
-  | typeof ScopeComplianceReportsPublish;
+  | typeof ScopeComplianceReportsPublish
+  | typeof ScopeComplianceContractTemplateRead
+  | typeof ScopeComplianceContractTemplateWrite;
 
 /** 全部合规域 scope。OAuth 申请合规权限时使用; 谨慎一次性申请全部, 推荐按业务最小集合申请。 */
 export function complianceScopes(): ComplianceScope[] {
@@ -61,5 +66,7 @@ export function complianceScopes(): ComplianceScope[] {
     ScopeComplianceReportsRead,
     ScopeComplianceReportsWrite,
     ScopeComplianceReportsPublish,
+    ScopeComplianceContractTemplateRead,
+    ScopeComplianceContractTemplateWrite,
   ];
 }
