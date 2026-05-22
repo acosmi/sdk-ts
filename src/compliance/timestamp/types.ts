@@ -92,3 +92,37 @@ export interface ListTimestampsRequest extends PageRequest {
   /** 创建时间上界，`yyyy-MM-dd HH:mm:ss`。 */
   createTimeEnd?: string;
 }
+
+// =============================================================================
+// TSA readonly views (compliance gateway S3 — gap-register U-7)
+// =============================================================================
+
+/**
+ * 时间章授权机构（TSA）provider 视图。对应后端 G3 `TsaProviderVO`。
+ *
+ * 描述某个 TSA provider 的对外可见状态——名称、所处环境、当前是否可用。
+ * 只读视图：不含 provider 端点、凭证、证书或其它内部接入材料。
+ */
+export interface TsaProvider {
+  /** provider 名称（如 `TsaProviderEnum.name()`）。 */
+  name: string;
+  /** provider 所处环境（如 `production` / `sandbox`）。 */
+  environment: string;
+  /** 该 provider 当前是否可用。 */
+  available: boolean;
+}
+
+/**
+ * 时间章统计视图。对应后端 G3 `TsaStatsVO`。
+ *
+ * 只读聚合：时间章总数 + 按校验状态分桶的计数。
+ */
+export interface TsaStats {
+  /** 时间章总数。 */
+  total: number;
+  /**
+   * 按校验状态分桶的计数。键为校验状态枚举名（如 `VERIFIED` / `PENDING` /
+   * `FAILED`），值为该状态下的时间章数量。
+   */
+  byVerificationStatus: Record<string, number>;
+}

@@ -194,6 +194,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
 | **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`（均返回 `PageResult<T>`） |
 | **Compliance — 能力与操作投影** | `compliance.getCapabilities`, `compliance.getFeatureGate`, `compliance.listOperations`, `compliance.getOperation` |
+| **Compliance — TSA 只读视图** | `compliance.listTsaProviders`, `compliance.getTsaStats` |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
 
@@ -475,6 +476,9 @@ client.compliance.getCapabilities(signal?)                 // 能力闸门列表
 client.compliance.getFeatureGate(action, signal?)          // 单动作能力（便捷，一次网络请求）
 client.compliance.listOperations(req?, signal?)            // 操作投影分页 → PageResult
 client.compliance.getOperation(id, signal?)                // 操作投影详情
+
+client.compliance.listTsaProviders(signal?)                // TSA provider 只读列表
+client.compliance.getTsaStats(signal?)                     // 时间章统计只读视图
 ```
 
 > 6 个 `list*` 分页方法（compliance gateway S1）均走 `GET .../page`，返回
