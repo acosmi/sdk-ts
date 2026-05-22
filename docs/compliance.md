@@ -292,6 +292,97 @@ The `*PageItem` types (`EvidenceAssetPageItem`, `TimestampPageItem`,
 plus a `createTime` (ISO-8601) field. They never expose provider raw payloads,
 certificates, storage keys, or contract originals.
 
+## Capabilities And Operation Projection
+
+Since v1.7.0 the SDK exposes the compliance gateway S2 reads: a capability gate
+query and an operation-projection view.
+
+```ts
+client.compliance.getCapabilities(signal?):              Promise<ComplianceCapability[]>;
+client.compliance.getFeatureGate(action, signal?):       Promise<ComplianceCapability | undefined>;
+client.compliance.listOperations(req?, signal?):         Promise<PageResult<OperationPageItem>>;
+client.compliance.getOperation(id, signal?):             Promise<OperationDetail>;
+```
+
+All four are authenticated GET reads — they follow the same read semantics as
+`getReport` / `getEvidenceAsset`: one safe `401` refresh-and-replay retry.
+
+### Capabilities
+
+`getCapabilities` returns one `ComplianceCapability` entry per high-risk /
+billed action: `signEnvelope`, `createH5SigningUrl`, `publishReport`,
+`approveSealApproval`, `executeSealUse`, `createSeal`.
+
+```ts
+const caps = await client.compliance.getCapabilities();
+for (const cap of caps) {
+  console.log(cap.action, cap.executable, cap.state, cap.requiredScopes);
+}
+```
+
+`ComplianceCapability` fields: `action` (string), `executable` (boolean),
+`state` (`executable` / `scope_missing` / `not_provisioned` /
+`step_up_required` / `gate_closed` / `unknown` — reuses the cross-domain
+`FeatureGateState` open union), `requiredScopes` (string[]), `requiredStepUp`
+(boolean), `reason` (string).
+
+Query the capability **before** invoking a high-risk action and gate the UI on
+it. When the capability cannot be fetched, fail-closed — treat the action as
+`executable: false`.
+
+`getFeatureGate` is a convenience that fetches `getCapabilities` and returns the
+entry whose `action` matches (or `undefined` when none match). **Each call makes
+one network request.** To gate several actions, call `getCapabilities` once and
+look them up locally instead of calling `getFeatureGate` repeatedly.
+
+```ts
+const gate = await client.compliance.getFeatureGate('publishReport');
+if (!gate || !gate.executable) {
+  if (gate?.state === 'step_up_required') {
+    await promptUserToReauthenticate();
+  }
+  return; // fail-closed
+}
+```
+
+### Operation Projection
+
+The operation projection describes the progress of a single operation — it is
+orthogonal to a fulfillment object's domain status.
+
+```ts
+const page = await client.compliance.listOperations({
+  pageNo: 1,
+  pageSize: 20,
+  status: 'failed',
+  createTimeStart: '2026-05-01 00:00:00',
+  createTimeEnd: '2026-05-22 23:59:59',
+});
+
+for (const op of page.list) {
+  console.log(op.id, op.operationId, op.status, op.terminal, op.retryable);
+}
+
+const detail = await client.compliance.getOperation(page.list[0].id);
+```
+
+`listOperations` (`GET /compliance/operations/page`) returns a yudao
+`PageResult<OperationPageItem>`. Its request extends the shared `PageRequest`
+plus the optional `status` / `createTimeStart` / `createTimeEnd` filters.
+`getOperation` (`GET /compliance/operations/{id}`) takes the numeric **row id**
+(not the `operationId` idempotency key) and returns `OperationDetail`.
+
+`OperationPageItem` / `OperationDetail` fields: `id` (number), `operationId`
+(string — the idempotency key), `status` (string), `terminal` (boolean),
+`retryable` (boolean), `attemptCount` (number), `businessNo` (string?),
+`contractNo` (string?), `sealId` (number?), `reconciliationStatus` (string?),
+`nextRetryAt` (string?), `requestedAt` (string?), `respondedAt` (string?),
+`createTime` (string). Time fields are ISO-8601. These views never expose
+provider raw payloads, certificates, storage keys, or contract originals.
+
+`createTimeStart` / `createTimeEnd` are caller-supplied datetime strings parsed
+by the backend as `yyyy-MM-dd HH:mm:ss`; the SDK passes them through verbatim.
+
 ## Error Classification
 
 Compliance business errors are returned as numeric Java error codes in the
@@ -332,15 +423,21 @@ for them.
 
 | Status | Methods | Meaning |
 | --- | --- | --- |
-| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
 | `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
-| `draft contract` | operation views, gate-status views, binary download helpers | Type drafts only — not exposed as callable capability in this release. |
+| `draft contract` | binary download helpers | Type drafts only — not exposed as callable capability in this release. |
 | `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
 
 `submitSealApproval` is `production-ready`: the backend enforces
 `Idempotency-Key` + business-fingerprint replay protection, so a repeated submit
 with the same key returns the original approval id instead of creating a
 duplicate. Persist the idempotency key on the caller side.
+
+`getCapabilities`, `getFeatureGate`, `listOperations`, and `getOperation` are
+`production-ready` against the compliance gateway S2 (`G2`) contract — endpoint,
+DTO, SDK tests, and docs are closed. They are read-only GET projections and do
+not themselves carry step-up or gate state; `getCapabilities` *reports* whether
+the gated actions are currently executable.
 
 ## Safety Boundary
 

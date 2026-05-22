@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.7.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-5
+> operation projection + U-6 capabilities — compliance gateway S2**：在
+> `client.compliance.*` 上新增能力闸门查询与操作投影读方法，对接已合并的后端
+> **G2** 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；8 个
+> 占位命名空间维持 `export {}`；`typecheck` / `lint` / `vitest` / `build` /
+> `test:pack` / `docs` 全绿。
+
+### Added
+
+- **`client.compliance.getCapabilities(signal?)`**（compliance gateway S2 /
+  缺口总账 U-6）——`GET /compliance/capabilities`，返回
+  `ComplianceCapability[]`。后端 G2 为每个高风险 / 收费动作（`signEnvelope` /
+  `createH5SigningUrl` / `publishReport` / `approveSealApproval` /
+  `executeSealUse` / `createSeal`）返回一条能力闸门视图：`executable` /
+  `state` / `requiredScopes` / `requiredStepUp` / `reason`。调用方在高风险动作
+  执行【前】查询做门控，拿不到能力时必须 fail-closed。
+- **`client.compliance.getFeatureGate(action, signal?)`**——便捷方法，拉取
+  `getCapabilities` 列表并返回 `action` 匹配的那一条（无匹配返回
+  `undefined`）。**每次调用产生一次网络请求**——门控多个动作时应改用
+  `getCapabilities` 一次取回再本地查表。
+- **`client.compliance.listOperations(req?, signal?)`**（compliance gateway
+  S2 / 缺口总账 U-5）——`GET /compliance/operations/page`，返回 yudao
+  `PageResult<OperationPageItem>`。过滤项 `status` / `createTimeStart` /
+  `createTimeEnd`（均可选），继承共享 `PageRequest` 分页 / 排序字段。
+- **`client.compliance.getOperation(id, signal?)`**——`GET
+  /compliance/operations/{id}`（`id` 为数值行主键，非 `operationId` 幂等键），
+  返回 `OperationDetail`。
+- **新增 compliance `operation` 子域类型**（`src/compliance/operation/types.ts`，
+  缺口总账 §9.5 子域归位）：`ComplianceCapability`（镜像后端 `CapabilityVO`，
+  `state` 复用 `src/shared/gate.ts` 的 `FeatureGateState`，不另造同名近似类型）/
+  `OperationPageItem` / `OperationDetail` / `ListOperationsRequest`（继承共享
+  `PageRequest`）。经 `compliance/index.ts` barrel 对外导出。
+- **GET 读语义**：4 个新方法均走既有 compliance GET 读路径——`401` 单次安全
+  刷新重放、不禁用。`createTimeStart` / `createTimeEnd` 为调用方提供的【原样
+  字符串】，后端按 `yyyy-MM-dd HH:mm:ss` 解析，SDK 原样透传，不做格式校验或
+  时区转换。
+
+---
+
 ## [1.6.0] — 2026-05-22
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
