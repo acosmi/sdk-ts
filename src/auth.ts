@@ -12,14 +12,24 @@ const authTimeoutMs = 30_000;
 // Discovery
 // =============================================================================
 
+/** OAuth metadata profile — 决定 well-known 端点的路径后缀 */
+export type OAuthMetadataProfile = 'web' | 'desktop';
+
 /**
- * 从 well-known 端点获取 Desktop OAuth 服务元数据。
+ * 从 well-known 端点获取指定 profile 的 OAuth 服务元数据。
  *
  * serverURL 可能含路径 (如 "https://acosmi.ai/api/v4")，
  * well-known 端点按 RFC 8414 必须在 origin 根路径:
- *   https://acosmi.ai/.well-known/oauth-authorization-server/desktop
+ *   https://acosmi.ai/.well-known/oauth-authorization-server/<profile>
+ *
+ * profile='desktop' 对应桌面 loopback OAuth；profile='web' 对应浏览器 Web OAuth。
+ * 内部 helper — `discover` / `discoverWebOAuthMetadata` 是其薄包装。
  */
-export async function discover(serverURL: string, signal?: AbortSignal): Promise<ServerMetadata> {
+export async function discoverWithProfile(
+  serverURL: string,
+  profile: OAuthMetadataProfile,
+  signal?: AbortSignal,
+): Promise<ServerMetadata> {
   let parsed: URL;
   try {
     parsed = new URL(serverURL.replace(/\/+$/, ''));
@@ -27,7 +37,7 @@ export async function discover(serverURL: string, signal?: AbortSignal): Promise
     throw new Error(`discover: invalid server URL: ${e instanceof Error ? e.message : String(e)}`);
   }
   const origin = `${parsed.protocol}//${parsed.host}`;
-  const endpoint = `${origin}/.well-known/oauth-authorization-server/desktop`;
+  const endpoint = `${origin}/.well-known/oauth-authorization-server/${profile}`;
 
   const ctl = withTimeout(authTimeoutMs, signal);
   let resp: Response;
@@ -58,6 +68,34 @@ export async function discover(serverURL: string, signal?: AbortSignal): Promise
   }
 
   return meta;
+}
+
+/**
+ * 从 well-known 端点获取 Desktop OAuth 服务元数据。
+ *
+ * serverURL 可能含路径 (如 "https://acosmi.ai/api/v4")，
+ * well-known 端点按 RFC 8414 必须在 origin 根路径:
+ *   https://acosmi.ai/.well-known/oauth-authorization-server/desktop
+ */
+export async function discover(serverURL: string, signal?: AbortSignal): Promise<ServerMetadata> {
+  return discoverWithProfile(serverURL, 'desktop', signal);
+}
+
+/**
+ * 从 well-known 端点获取 Web OAuth 服务元数据。
+ *
+ * 与 `discover` 行为一致, 但请求路径为
+ *   https://acosmi.com/.well-known/oauth-authorization-server/web
+ *
+ * 浏览器侧 Web OAuth (csign 等第一方 Web 应用) 必须用此 profile，
+ * 它返回 Web authorize/token 端点; `discover` 的 desktop profile 返回的是
+ * 桌面 loopback 端点, 不可混用。
+ */
+export async function discoverWebOAuthMetadata(
+  serverURL: string,
+  signal?: AbortSignal,
+): Promise<ServerMetadata> {
+  return discoverWithProfile(serverURL, 'web', signal);
 }
 
 // =============================================================================
@@ -104,15 +142,87 @@ export async function register(
   }
 }
 
+/** Web OAuth 动态注册参数 */
+export interface RegisterWebOAuthClientOptions {
+  /** 客户端展示名 (RFC 7591 client_name) */
+  clientName: string;
+  /** 浏览器 Web OAuth 的 redirect_uri 列表 (如 ["https://sign.zhonglvbao.com/login/callback"]) */
+  redirectURIs: string[];
+  /** 可选 scope 列表 — 提供时以空格连接写入 RFC 7591 scope 字段 */
+  scopes?: string[];
+}
+
+/**
+ * 动态注册 Web OAuth (浏览器) 客户端，获取 client_id。
+ *
+ * 与 `register` (桌面 loopback, 硬编码 redirect_uri=127.0.0.1) 的区别:
+ * 本函数允许传入任意 Web redirect_uri，供 csign 等第一方 Web 应用使用。
+ * `token_endpoint_auth_method` 仍为 `none` (PKCE public client)。
+ */
+export async function registerWebOAuthClient(
+  meta: ServerMetadata,
+  opts: RegisterWebOAuthClientOptions,
+  signal?: AbortSignal,
+): Promise<ClientRegistration> {
+  const regReq = {
+    client_name: opts.clientName,
+    token_endpoint_auth_method: 'none',
+    grant_types: ['authorization_code', 'refresh_token'],
+    redirect_uris: opts.redirectURIs,
+    response_types: ['code'],
+    ...(opts.scopes ? { scope: opts.scopes.join(' ') } : {}),
+  };
+
+  const ctl = withTimeout(authTimeoutMs, signal);
+  let resp: Response;
+  try {
+    resp = await fetch(meta.registration_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(regReq),
+      signal: ctl.signal,
+    });
+  } catch (e) {
+    throw new Error(`register: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    ctl.dispose();
+  }
+
+  if (resp.status !== 200 && resp.status !== 201) {
+    throw new Error(`register: HTTP ${resp.status}`);
+  }
+
+  try {
+    return (await resp.json()) as ClientRegistration;
+  } catch (e) {
+    throw new Error(`register: decode: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 // =============================================================================
 // PKCE
 // =============================================================================
 
-async function generateCodeVerifier(): Promise<string> {
+/** 生成 32 字节加密随机数，base64url 无填充编码 — PKCE verifier / state 共用随机源 */
+async function randomBase64Url32(): Promise<string> {
   const c = await getCrypto();
   const b = new Uint8Array(32);
   c.getRandomValues(b);
   return base64urlNoPad(b);
+}
+
+async function generateCodeVerifier(): Promise<string> {
+  return randomBase64Url32();
+}
+
+/**
+ * 生成 OAuth `state` 参数 — 32 字节加密随机数, base64url 无填充。
+ *
+ * 与 `generateCodeVerifier` 共用随机源 (`randomBase64Url32`)。Web OAuth 流程
+ * 用它做 CSRF 防护: 授权请求带上 state, callback 回来必须逐字符比对。
+ */
+export async function generateState(): Promise<string> {
+  return randomBase64Url32();
 }
 
 async function codeChallenge(verifier: string): Promise<string> {
@@ -160,7 +270,8 @@ export type LoginErrCode =
   | 'auth_denied'
   | 'auth_timeout'
   | 'token_exchange_failed'
-  | 'ssl_proxy_detected';
+  | 'ssl_proxy_detected'
+  | 'state_mismatch';
 
 export const ErrDiscovery = 'discovery_failed' as const;
 export const ErrRegistration = 'registration_failed' as const;
@@ -169,6 +280,8 @@ export const ErrAuthDenied = 'auth_denied' as const;
 export const ErrTimeout = 'auth_timeout' as const;
 export const ErrTokenExchange = 'token_exchange_failed' as const;
 export const ErrSSLProxy = 'ssl_proxy_detected' as const;
+/** Web OAuth callback 的 state 与发起时不一致 (CSRF 防护) */
+export const ErrStateMismatch = 'state_mismatch' as const;
 
 /** 登录流程事件 */
 export interface LoginEvent {
@@ -358,6 +471,139 @@ function htmlEscape(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// =============================================================================
+// Web OAuth (浏览器整页重定向流程)
+// =============================================================================
+
+/**
+ * Web OAuth 授权请求 — `createWebAuthorizationRequest` 的返回结构。
+ *
+ * 发起方 (csign Next Route Handler 等) 应把整个对象作为 pending 状态持久化
+ * (HttpOnly cookie 等)，callback 回来时取出供 `completeWebAuthorizationRequest` 校验。
+ */
+export interface WebAuthorizationRequest {
+  /** 完整授权 URL — 浏览器整页跳转到此地址 */
+  authUrl: string;
+  /** CSRF state — callback 必须回传同值 */
+  state: string;
+  /** PKCE code_verifier — 换 token 时使用, 切勿泄露给浏览器 URL */
+  verifier: string;
+  /** 动态注册得到的 client_id */
+  clientID: string;
+  /** 本次授权使用的 redirect_uri */
+  redirectURI: string;
+  /** OAuth issuer / SDK 业务域名 (用于 callback 阶段重新发现 metadata) */
+  serverURL: string;
+  /** 创建时间戳 (Date.now())，发起方可据此实现 TTL 过期判定 */
+  createdAt: number;
+}
+
+/** `createWebAuthorizationRequest` 参数 */
+export interface CreateWebAuthorizationRequestOptions {
+  /** 动态注册得到的 client_id */
+  clientID: string;
+  /** redirect_uri (须与动态注册登记的一致) */
+  redirectURI: string;
+  /** 请求的 scope 列表 — 以空格连接写入 authUrl */
+  scopes: string[];
+  /** OAuth issuer / SDK 业务域名 */
+  serverURL: string;
+  /** 可选 — SSO 场景下预填邮箱 */
+  loginHint?: string;
+}
+
+/**
+ * 构造 Web OAuth 授权请求。
+ *
+ * 生成 PKCE verifier + S256 challenge + CSRF state，按 OAuth 2.1 拼装授权 URL
+ * (含 `state` 参数 — SDK 桌面 `authorize` 不带 state, Web 流程必须带)。
+ *
+ * 返回的 `WebAuthorizationRequest` 应整体持久化为 pending 状态，
+ * callback 阶段交给 `completeWebAuthorizationRequest`。
+ */
+export async function createWebAuthorizationRequest(
+  meta: ServerMetadata,
+  opts: CreateWebAuthorizationRequestOptions,
+): Promise<WebAuthorizationRequest> {
+  const verifier = await generateCodeVerifier();
+  const challenge = await codeChallenge(verifier);
+  const state = await generateState();
+
+  const authURL = new URL(meta.authorization_endpoint);
+  authURL.searchParams.set('response_type', 'code');
+  authURL.searchParams.set('client_id', opts.clientID);
+  authURL.searchParams.set('redirect_uri', opts.redirectURI);
+  authURL.searchParams.set('code_challenge', challenge);
+  authURL.searchParams.set('code_challenge_method', 'S256');
+  authURL.searchParams.set('state', state);
+  authURL.searchParams.set('scope', opts.scopes.join(' '));
+  if (opts.loginHint) {
+    authURL.searchParams.set('login_hint', opts.loginHint);
+  }
+
+  return {
+    authUrl: authURL.toString(),
+    state,
+    verifier,
+    clientID: opts.clientID,
+    redirectURI: opts.redirectURI,
+    serverURL: opts.serverURL,
+    createdAt: Date.now(),
+  };
+}
+
+/** `completeWebAuthorizationRequest` 的 pending 状态 (即 WebAuthorizationRequest 的子集) */
+export interface WebAuthorizationPending {
+  state: string;
+  verifier: string;
+  clientID: string;
+  redirectURI: string;
+  serverURL: string;
+}
+
+/** `completeWebAuthorizationRequest` 的 callback 参数 */
+export interface WebAuthorizationCallbackParams {
+  /** 授权服务器回传的 authorization code */
+  code: string;
+  /** 授权服务器回传的 state — 必须与 pending.state 一致 */
+  state: string;
+}
+
+/**
+ * 完成 Web OAuth 授权 — 校验 state → 换 token → 返回可持久化的 TokenSet。
+ *
+ * `pending` 为 `createWebAuthorizationRequest` 返回对象 (或其等价持久化结构);
+ * `params` 为 callback URL 解析出的 `code` / `state`。
+ *
+ * state 不匹配时抛错 (CSRF 防护)。内部依次:
+ *   discoverWebOAuthMetadata(pending.serverURL) → exchangeCode(...) → newTokenSet(...)。
+ */
+export async function completeWebAuthorizationRequest(
+  pending: WebAuthorizationPending,
+  params: WebAuthorizationCallbackParams,
+  signal?: AbortSignal,
+): Promise<TokenSet> {
+  if (!params.code) {
+    throw new Error('completeWebAuthorizationRequest: missing authorization code');
+  }
+  if (params.state !== pending.state) {
+    throw new Error(
+      `completeWebAuthorizationRequest: ${ErrStateMismatch}: callback state does not match pending state (possible CSRF)`,
+    );
+  }
+
+  const meta = await discoverWebOAuthMetadata(pending.serverURL, signal);
+  const resp = await exchangeCode(
+    meta,
+    pending.clientID,
+    params.code,
+    pending.redirectURI,
+    pending.verifier,
+    signal,
+  );
+  return newTokenSet(resp, pending.clientID, pending.serverURL);
 }
 
 // =============================================================================

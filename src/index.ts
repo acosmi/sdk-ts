@@ -28,8 +28,14 @@ export {
 // === Auth helpers ===
 export {
   discover,
+  discoverWithProfile,
+  discoverWebOAuthMetadata,
   register,
+  registerWebOAuthClient,
   authorize,
+  generateState,
+  createWebAuthorizationRequest,
+  completeWebAuthorizationRequest,
   exchangeCode,
   refreshToken,
   revokeToken,
@@ -45,11 +51,18 @@ export {
   ErrTimeout,
   ErrTokenExchange,
   ErrSSLProxy,
+  ErrStateMismatch,
   type LoginEvent,
   type LoginEventType,
   type LoginErrCode,
   type LoginOptions,
   type AuthorizeResult,
+  type OAuthMetadataProfile,
+  type RegisterWebOAuthClientOptions,
+  type WebAuthorizationRequest,
+  type CreateWebAuthorizationRequestOptions,
+  type WebAuthorizationPending,
+  type WebAuthorizationCallbackParams,
 } from './auth';
 
 // === Scopes ===
