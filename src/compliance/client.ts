@@ -23,16 +23,23 @@ import {
   parseHTTPErrorWithHeader,
   readLimited,
 } from '../core/http';
+import type { PageRequest, PageResult } from '../shared/pagination';
 import type { CompliancePollOptions, ComplianceWriteOptions } from './types';
 import type {
   CreateEvidenceAssetRequest,
   EvidenceAsset,
+  EvidenceAssetPageItem,
   EvidencePackage,
+  EvidencePackagePageItem,
+  ListEvidenceAssetsRequest,
+  ListEvidencePackagesRequest,
   PublicEvidenceVerifyResult,
 } from './evidence/types';
 import type {
   ComplianceTimestampVerificationStatus,
   IssueTimestampRequest,
+  ListTimestampsRequest,
+  TimestampPageItem,
   TimestampToken,
   TimestampVerifyResult,
   VerifyTimestampRequest,
@@ -40,19 +47,25 @@ import type {
 import type {
   ComplianceReport,
   CreateReportRequest,
+  ListReportsRequest,
   ReportDownload,
+  ReportPageItem,
 } from './report/types';
 import type {
   CreateH5SigningUrlRequest,
   CreateSigningEnvelopeRequest,
+  ListSigningEnvelopesRequest,
   SignEnvelopeRequest,
   SigningEnvelope,
+  SigningEnvelopePageItem,
 } from './signing/types';
 import type {
   ApproveSealApprovalQuery,
   CancelSealApprovalQuery,
+  ListSealApprovalsRequest,
   RejectSealApprovalQuery,
   SealApproval,
+  SealApprovalPageItem,
   SubmitSealApprovalRequest,
 } from './seal-approval/types';
 import type {
@@ -155,6 +168,25 @@ export class ComplianceClient {
   }
 
   /**
+   * 读 — 证据资产分页列表（compliance gateway S1）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。返回 yudao `PageResult<T>`
+   * （`{ total, list }`）。所有过滤项可选；`createTimeStart` / `createTimeEnd`
+   * 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。
+   */
+  listEvidenceAssets(
+    req: ListEvidenceAssetsRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<EvidenceAssetPageItem>> {
+    return this.read<PageResult<EvidenceAssetPageItem>>(
+      'GET',
+      `/compliance/evidence/assets/page${pageQuery(req, ['assetType', 'status', 'createTimeStart', 'createTimeEnd'])}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
    * 公开 verify。隐私边界：返回字段不含 PII / 合同原文 / storage / provider raw。
    *
    * 匿名可调用：未 login 时走匿名请求，不会抛 `not authorized, call login() first`。
@@ -212,6 +244,24 @@ export class ComplianceClient {
     );
   }
 
+  /**
+   * 读 — 时间章分页列表（compliance gateway S1）。
+   *
+   * 走 GET 读路径。返回 yudao `PageResult<T>`。所有过滤项可选；`createTimeStart` /
+   * `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。
+   */
+  listTimestamps(
+    req: ListTimestampsRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<TimestampPageItem>> {
+    return this.read<PageResult<TimestampPageItem>>(
+      'GET',
+      `/compliance/timestamps/page${pageQuery(req, ['provider', 'verificationStatus', 'createTimeStart', 'createTimeEnd'])}`,
+      null,
+      signal,
+    );
+  }
+
   /** verify — 本地离线校验已申请的时间章。 */
   verifyTimestamp(
     req: VerifyTimestampRequest,
@@ -264,6 +314,24 @@ export class ComplianceClient {
     );
   }
 
+  /**
+   * 读 — 证据包分页列表（compliance gateway S1）。
+   *
+   * 走 GET 读路径。返回 yudao `PageResult<T>`。所有过滤项可选；`createTimeStart` /
+   * `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。
+   */
+  listEvidencePackages(
+    req: ListEvidencePackagesRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<EvidencePackagePageItem>> {
+    return this.read<PageResult<EvidencePackagePageItem>>(
+      'GET',
+      `/compliance/evidence/packages/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
+      null,
+      signal,
+    );
+  }
+
   // =========================================================================
   // Report
   // =========================================================================
@@ -281,6 +349,24 @@ export class ComplianceClient {
     return this.read<ComplianceReport>(
       'GET',
       `/compliance/reports/${encodeURIComponent(id)}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — 证据报告分页列表（compliance gateway S1）。
+   *
+   * 走 GET 读路径。返回 yudao `PageResult<T>`。所有过滤项可选；`createTimeStart` /
+   * `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。
+   */
+  listReports(
+    req: ListReportsRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<ReportPageItem>> {
+    return this.read<PageResult<ReportPageItem>>(
+      'GET',
+      `/compliance/reports/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
       null,
       signal,
     );
@@ -342,6 +428,24 @@ export class ComplianceClient {
     return this.read<SigningEnvelope>(
       'GET',
       `/compliance/signing-envelopes/${encodeURIComponent(envelopeId)}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — 签署 envelope 分页列表（compliance gateway S1）。
+   *
+   * 走 GET 读路径。返回 yudao `PageResult<T>`。所有过滤项可选；`createTimeStart` /
+   * `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。
+   */
+  listSigningEnvelopes(
+    req: ListSigningEnvelopesRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<SigningEnvelopePageItem>> {
+    return this.read<PageResult<SigningEnvelopePageItem>>(
+      'GET',
+      `/compliance/signing-envelopes/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
       null,
       signal,
     );
@@ -490,6 +594,26 @@ export class ComplianceClient {
     return this.read<SealApproval>(
       'GET',
       `/compliance/seal-approvals/${encodeURIComponent(id)}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — 用印审批分页列表（compliance gateway S1）。
+   *
+   * 与 {@link listPendingSealApprovals}（仅 pending、不分页）不同，本方法支持分页与
+   * 状态 / 时间过滤。走 GET 读路径。返回 yudao `PageResult<T>`。所有过滤项可选；
+   * `createTimeStart` / `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，
+   * SDK 原样透传。
+   */
+  listSealApprovals(
+    req: ListSealApprovalsRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<SealApprovalPageItem>> {
+    return this.read<PageResult<SealApprovalPageItem>>(
+      'GET',
+      `/compliance/seal-approvals/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
       null,
       signal,
     );
@@ -740,6 +864,35 @@ function classifyProviderStatus(
     default:
       return 'continue';
   }
+}
+
+/**
+ * 把分页请求 + 命名空间各自的过滤字段拼成 query string（含前导 `?`，空则返回 `''`）。
+ *
+ * - 分页 / 排序字段（`pageNo` / `pageSize` / `sortBy` / `sortDirection`）来自共享
+ *   `PageRequest`，由本函数统一处理。
+ * - `filterKeys` 是调用方命名空间各自声明的过滤字段名白名单 —— 仅这些键会被读取，
+ *   值经 `String()` 归一后原样透传（`createTimeStart` / `createTimeEnd` 等 datetime
+ *   字符串不在 SDK 侧做格式校验或时区转换）。
+ * - `null` / `undefined` / 空字符串的字段一律跳过，不发送空参数。
+ */
+function pageQuery<T extends PageRequest>(req: T, filterKeys: ReadonlyArray<keyof T>): string {
+  const q = new URLSearchParams();
+  const append = (key: string, value: unknown): void => {
+    if (value == null) return;
+    const s = typeof value === 'string' ? value : String(value);
+    if (s === '') return;
+    q.set(key, s);
+  };
+  append('pageNo', req.pageNo);
+  append('pageSize', req.pageSize);
+  append('sortBy', req.sortBy);
+  append('sortDirection', req.sortDirection);
+  for (const key of filterKeys) {
+    append(String(key), req[key]);
+  }
+  const qs = q.toString();
+  return qs ? '?' + qs : '';
 }
 
 function writeCtx(

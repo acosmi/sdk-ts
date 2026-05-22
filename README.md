@@ -192,6 +192,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Bug Report** | `submitBugReport`, `getBugReport`                                                  |
 | **Web Search** | `newWebSearchTool` (factory)                                                       |
 | **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
+| **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`（均返回 `PageResult<T>`） |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
 
@@ -433,12 +434,15 @@ PII / 合同原文 / storage bucket+key / subject snapshot / provider raw / TSA 
 client.compliance.createEvidenceAsset(req, options?)
 client.compliance.getEvidenceAsset(id, signal?)
 client.compliance.verifyEvidencePublic(req, signal?)
+client.compliance.listEvidenceAssets(req?, signal?)        // 分页 → PageResult
+client.compliance.listEvidencePackages(req?, signal?)      // 分页 → PageResult
 
 client.compliance.issueTimestamp(req, options?)
 client.compliance.issueTimestampForAsset(assetId, options?)
 client.compliance.getTimestamp(id, signal?)
 client.compliance.verifyTimestamp(req, options?)
 client.compliance.waitForTimestampVerified(id, opts?)
+client.compliance.listTimestamps(req?, signal?)            // 分页 → PageResult
 
 client.compliance.buildEvidencePackage(assetId, timestampTokenId?, options?)
 
@@ -446,12 +450,14 @@ client.compliance.createReport(req, options?)    // 需 compliance:reports:write
 client.compliance.getReport(id, signal?)
 client.compliance.publishReport(id, options?)    // step-up
 client.compliance.downloadReport(id, signal?)    // 离线复核 hash 视图
+client.compliance.listReports(req?, signal?)               // 分页 → PageResult
 
 client.compliance.createSigningEnvelope(req, options?)
 client.compliance.getSigningEnvelope(envelopeId, signal?)
 client.compliance.signEnvelope(envelopeId, req, options?)            // step-up + gate
 client.compliance.createH5SigningUrl(envelopeId, req, options?)      // step-up + gate
 client.compliance.syncSigningEnvelopeStatus(envelopeId, options?)
+client.compliance.listSigningEnvelopes(req?, signal?)      // 分页 → PageResult
 
 client.compliance.submitSealApproval(req, options?)
 client.compliance.approveSealApproval(id, query, options?) // step-up
@@ -459,10 +465,17 @@ client.compliance.rejectSealApproval(id, query, options?)
 client.compliance.cancelSealApproval(id, query, options?)
 client.compliance.listPendingSealApprovals(signal?)
 client.compliance.getSealApproval(id, signal?)
+client.compliance.listSealApprovals(req?, signal?)         // 分页 → PageResult
 
 client.compliance.getProviderRequest(id, signal?)
 client.compliance.waitForProviderRequestTerminal(id, opts?)
 ```
+
+> 6 个 `list*` 分页方法（compliance gateway S1）均走 `GET .../page`，返回
+> yudao `PageResult<T>`（`{ total, list }`）。请求参数继承共享 `PageRequest`
+> （`pageNo` / `pageSize` / `sortBy` / `sortDirection`，全部可选）+ 各自的过滤项。
+> `createTimeStart` / `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 字符串提供，
+> SDK 原样透传、不做格式校验。
 
 ### 示例
 

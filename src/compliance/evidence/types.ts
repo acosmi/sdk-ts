@@ -11,6 +11,8 @@
 //   - 任何"未来扩展字段"必须先在 Java 公共 DTO 中收敛后再在此声明，杜绝 SDK 提前
 //     暴露 service 内部字段。
 
+import type { PageRequest } from '../../shared/pagination';
+
 // =============================================================================
 // Evidence Asset
 // =============================================================================
@@ -101,4 +103,83 @@ export interface EvidencePackage {
   manifestHash: string;
   packageHash: string;
   status: string;
+}
+
+// =============================================================================
+// List / Page (compliance gateway S1 — gap-register U-1)
+// =============================================================================
+
+/**
+ * 证据资产分页【列表项】视图。对应后端 G1 `EvidenceAssetPageItem`。
+ *
+ * 与 {@link EvidenceAsset} 一致的 SDK-safe 子集 + `createTime`；时间字段为
+ * ISO-8601 字符串。
+ */
+export interface EvidenceAssetPageItem {
+  id: number;
+  evidenceNo: string;
+  publicVerifyCode?: string | null;
+  assetType: ComplianceAssetType | string;
+  name: string;
+  mimeType?: string | null;
+  size?: number | null;
+  hashAlgorithm: ComplianceHashAlgorithm | string;
+  contentHash: string;
+  canonicalizationProfile?: string | null;
+  digestSource: ComplianceDigestSource | string;
+  privacyLevel: CompliancePrivacyLevel | string;
+  status: string;
+  /** 创建时间 ISO-8601。 */
+  createTime: string;
+}
+
+/**
+ * `listEvidenceAssets` 请求参数。
+ *
+ * 继承 {@link PageRequest} 的 `pageNo` / `pageSize` / `sortBy` / `sortDirection`，
+ * 全部可选；省略时由服务端取默认页。
+ *
+ * `createTimeStart` / `createTimeEnd` 为调用方提供的【原样字符串】，后端按
+ * `yyyy-MM-dd HH:mm:ss` 解析（例如 `'2026-05-01 00:00:00'`）；SDK 不做格式校验、
+ * 不做时区转换，原样透传查询参数。
+ */
+export interface ListEvidenceAssetsRequest extends PageRequest {
+  /** 资产类型过滤（`AssetTypeEnum.name()`）。 */
+  assetType?: ComplianceAssetType | string;
+  /** 资产状态过滤。 */
+  status?: string;
+  /** 创建时间下界，`yyyy-MM-dd HH:mm:ss`。 */
+  createTimeStart?: string;
+  /** 创建时间上界，`yyyy-MM-dd HH:mm:ss`。 */
+  createTimeEnd?: string;
+}
+
+/**
+ * 证据包分页【列表项】视图。对应后端 G1 `EvidencePackagePageItem`。
+ */
+export interface EvidencePackagePageItem {
+  id: number;
+  assetId: number;
+  timestampTokenId?: number | null;
+  chainId: string;
+  packageVersion: string;
+  hashAlgorithm: string;
+  manifestHash: string;
+  packageHash: string;
+  status: string;
+  /** 创建时间 ISO-8601。 */
+  createTime: string;
+}
+
+/**
+ * `listEvidencePackages` 请求参数。`createTimeStart` / `createTimeEnd` 语义见
+ * {@link ListEvidenceAssetsRequest}。
+ */
+export interface ListEvidencePackagesRequest extends PageRequest {
+  /** 证据包状态过滤。 */
+  status?: string;
+  /** 创建时间下界，`yyyy-MM-dd HH:mm:ss`。 */
+  createTimeStart?: string;
+  /** 创建时间上界，`yyyy-MM-dd HH:mm:ss`。 */
+  createTimeEnd?: string;
 }

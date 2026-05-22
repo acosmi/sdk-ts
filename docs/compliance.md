@@ -231,6 +231,67 @@ if (view.status === 'SUCCESS') {
 }
 ```
 
+## Paginated Lists
+
+Since v1.6.0 the SDK exposes six paginated list reads against the backend
+compliance gateway (`GET .../page`). Each returns a yudao `PageResult<T>`
+(`{ total, list }` — the single SDK-wide pagination result shape, an alias of
+`YudaoPageResult<T>`):
+
+```ts
+import type { PageResult, EvidenceAssetPageItem } from '@acosmi/sdk-ts';
+
+client.compliance.listEvidenceAssets(req?, signal?):    Promise<PageResult<EvidenceAssetPageItem>>;
+client.compliance.listTimestamps(req?, signal?):        Promise<PageResult<TimestampPageItem>>;
+client.compliance.listEvidencePackages(req?, signal?):  Promise<PageResult<EvidencePackagePageItem>>;
+client.compliance.listReports(req?, signal?):           Promise<PageResult<ReportPageItem>>;
+client.compliance.listSigningEnvelopes(req?, signal?):  Promise<PageResult<SigningEnvelopePageItem>>;
+client.compliance.listSealApprovals(req?, signal?):     Promise<PageResult<SealApprovalPageItem>>;
+```
+
+The request argument is optional. It extends the shared `PageRequest`
+(`pageNo`, `pageSize`, `sortBy`, `sortDirection` — all optional; omitted values
+let the backend pick defaults) plus per-method filters:
+
+| Method | Endpoint | Filters (all optional) |
+| --- | --- | --- |
+| `listEvidenceAssets` | `GET /compliance/evidence/assets/page` | `assetType`, `status`, `createTimeStart`, `createTimeEnd` |
+| `listTimestamps` | `GET /compliance/timestamps/page` | `provider`, `verificationStatus`, `createTimeStart`, `createTimeEnd` |
+| `listEvidencePackages` | `GET /compliance/evidence/packages/page` | `status`, `createTimeStart`, `createTimeEnd` |
+| `listReports` | `GET /compliance/reports/page` | `status`, `createTimeStart`, `createTimeEnd` |
+| `listSigningEnvelopes` | `GET /compliance/signing-envelopes/page` | `status`, `createTimeStart`, `createTimeEnd` |
+| `listSealApprovals` | `GET /compliance/seal-approvals/page` | `status`, `createTimeStart`, `createTimeEnd` |
+
+`createTimeStart` / `createTimeEnd` are caller-supplied datetime **strings**. The
+backend parses them as `yyyy-MM-dd HH:mm:ss` (for example
+`'2026-05-01 00:00:00'`). The SDK passes them through verbatim — it does not
+validate the format or convert time zones.
+
+```ts
+const page = await client.compliance.listSealApprovals({
+  pageNo: 1,
+  pageSize: 20,
+  status: 'PENDING',
+  createTimeStart: '2026-05-01 00:00:00',
+  createTimeEnd: '2026-05-22 23:59:59',
+});
+
+console.log(page.total, page.list.length);
+```
+
+These are authenticated GET reads, so they follow the same read semantics as
+`getEvidenceAsset` / `getReport`: one safe `401` refresh-and-replay retry.
+
+`listSealApprovals` is distinct from `listPendingSealApprovals` — the latter
+returns only pending approvals as a plain array; `listSealApprovals` is paginated
+and supports status / time filtering.
+
+The `*PageItem` types (`EvidenceAssetPageItem`, `TimestampPageItem`,
+`EvidencePackagePageItem`, `ReportPageItem`, `SigningEnvelopePageItem`,
+`SealApprovalPageItem`) are the SDK-safe subset of the corresponding detail view
+plus a `createTime` (ISO-8601) field. They never expose provider raw payloads,
+certificates, storage keys, or contract originals.
+
 ## Error Classification
 
 Compliance business errors are returned as numeric Java error codes in the
@@ -271,7 +332,7 @@ for them.
 
 | Status | Methods | Meaning |
 | --- | --- | --- |
-| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `getProviderRequest`, `waitForProviderRequestTerminal`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
 | `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
 | `draft contract` | operation views, gate-status views, binary download helpers | Type drafts only — not exposed as callable capability in this release. |
 | `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
