@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.2] — 2026-05-22
+
+> `src/` 目录按业务域重组（实施计划 `docs/audit/sdk-ts-directory-restructure-plan-2026-05-22`）。
+> **纯内部重组 + 开发工具 + 文档**——公共导出符号集合（295 个标识符）、`package.json`
+> `exports`、`dist/` 产物路径全部一字未变；`typecheck` / `lint` / `vitest`(140) / `build` /
+> `test:pack`（消费者视角 packed 产物）全绿。下游 `crabcode` / `crabclaw` / `csign` 零感知。
+
+### Changed
+
+- `src/` 从扁平 36 文件重组为按业务域分文件夹结构（`core/`、`shared/`、`auth/`、
+  `models/`、`billing/`、`skills/`、`notifications/`、`agent-runs/`、`compliance/`、
+  `support/`）；每域一个 barrel `index.ts`，根 `index.ts` 改为只从各域 barrel re-export。
+  `types.ts`（1341 行）、`scopes.ts`、`compliance-*.ts` 按域拆分。为后续平台控制面能力
+  预留 `apiClients/`、`tenant/`、`iam/`、`audit/`、`operations/`、`mcp/`、`gateway/`、
+  `certification/` 占位目录。
+
+### Added
+
+- TypeDoc API 参考文档：`npm run docs` 生成 `docs/api/`（Markdown）；接入 `release.yml`。
+- `examples/` 补 core / auth / agent-runs 三个示例（此前仅 compliance 三例）。
+
+### Removed
+
+- 死入口 `src/node.ts`——它既非 `tsup` 构建 entry 也不在 `package.json` `exports`，
+  从未被打包发布，删除对所有外部消费者零可观测影响。
+
+---
+
 ## [1.4.1] — 2026-05-22
 
 ### Added

@@ -2,9 +2,9 @@
 // (Go 测试在 adapter_openai_test.go / thinking_test.go 等; TS 这里抽核心)
 
 import { describe, it, expect } from 'vitest';
-import { AnthropicAdapter, OpenAIAdapter } from '../../src/adapters/index';
-import type { ChatRequest, ModelCapabilities } from '../../src/types';
-import { ThinkingMax, ThinkingHigh, ThinkingOff } from '../../src/types';
+import { AnthropicAdapter, OpenAIAdapter } from '../../src/models/adapters/index';
+import type { ChatRequest, ModelCapabilities } from '../../src/models/types';
+import { ThinkingMax, ThinkingHigh, ThinkingOff } from '../../src/models/types';
 
 const baseCaps: ModelCapabilities = {
   supports_thinking: false,

@@ -10,8 +10,8 @@ export default defineConfig([
   {
     entry: {
       index: 'src/index.ts',
-      'adapters/anthropic': 'src/adapters/anthropic.ts',
-      'adapters/openai': 'src/adapters/openai.ts',
+      'adapters/anthropic': 'src/models/adapters/anthropic.ts',
+      'adapters/openai': 'src/models/adapters/openai.ts',
       'sanitize/index': 'src/sanitize/index.ts',
     },
     outDir: 'dist/node',

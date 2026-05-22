@@ -6,9 +6,10 @@
 
 ## 状态
 
-- 端口源：[acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) v1.0.0（与 Go SDK 联动稳定测试版）
+- 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
 - 当前版本：**1.3.2**（`verifyEvidencePublic` 匿名公开验真收口、新增 `compliance:reports:write` scope、compliance 方法状态四档分级；`1.3.0` 新增 `client.compliance`、`complianceBaseURL`、合规域 types/errors/status/scopes、示例与文档；详见 [CHANGELOG](./CHANGELOG.md)）
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
+- API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
 
 ## 安装
@@ -76,7 +77,7 @@ for await (const ev of stream) {
 }
 ```
 
-`chatStreamWithUsage()` 返回带 usage/error/sources 标签的 AsyncIterable，便于聚合统计（详见 `src/client.ts`）。
+`chatStreamWithUsage()` 返回带 usage/error/sources 标签的 AsyncIterable，便于聚合统计（详见 `src/core/client.ts`）。
 
 ## Agent Runs
 
@@ -449,8 +450,11 @@ client.compliance.waitForProviderRequestTerminal(id, opts?)
 
 ### 示例
 
-`examples/` 下提供 3 份可直接运行的端到端示例，并随 npm 包一起发布：
+`examples/` 下提供可直接运行的端到端示例，并随 npm 包一起发布：
 
+- `examples/core-chat.ts` — Client 构造 / 配置 / 模型列举 / 同步与流式 chat
+- `examples/auth-oauth-flow.ts` — 手动 OAuth 2.1 PKCE 流程（discover / register / authorize / exchangeCode / refreshToken / token store）
+- `examples/agent-runs-stream.ts` — Agent Run Gateway 创建 / 流式消费 / 本地工具桥 / 产物下载
 - `examples/compliance-read.ts` — 只读 / public verify 流程
 - `examples/compliance-evidence-timestamp.ts` — hash-only evidence + timestamp + package 链路
 - `examples/compliance-envelope.ts` — envelope 创建 / 错误正确处理（step-up / gate closed）
@@ -481,6 +485,7 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 ```
 
 ## 更新历史

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "@acosmi/sdk-ts",
+  "entryPoints": ["src/index.ts"],
+  "tsconfig": "./tsconfig.json",
+  "out": "docs/api",
+  "plugin": ["typedoc-plugin-markdown"],
+  "readme": "none",
+  "exclude": ["**/*.test.ts", "src/core/http.ts"]
+}

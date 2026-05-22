@@ -8,7 +8,7 @@ import {
   ScopeAI,
   ScopeSkills,
   ScopeAccount,
-} from '../src/scopes';
+} from '../src/auth/scopes';
 
 describe('scopes', () => {
   it('allScopes = 三个分组 scope', () => {

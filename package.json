@@ -1,6 +1,6 @@
 {
   "name": "@acosmi/sdk-ts",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Acosmi TypeScript SDK：模型网关、Agent Run Gateway 与 Compliance（电子证据、时间章、报告、签署 envelope）统一客户端，支持浏览器 / Node ≥18 / Deno / Bun。",
   "type": "module",
   "main": "./dist/node/index.cjs",
@@ -51,7 +51,8 @@
     "format": "prettier --write \"src/**/*.{ts,json}\"",
     "typecheck": "tsc --noEmit",
     "test:pack": "node scripts/smoke-pack.mjs",
-    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build && npm run test:pack"
+    "docs": "typedoc",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm test && npm run build && npm run test:pack && npm run docs"
   },
   "engines": {
     "node": ">=18"
@@ -90,6 +91,8 @@
     "eslint": "^8.57.0",
     "prettier": "^3.0.0",
     "tsup": "^8.0.0",
+    "typedoc": "^0.28.19",
+    "typedoc-plugin-markdown": "^4.11.0",
     "typescript": "^5.4.0",
     "vitest": "^1.0.0"
   }
