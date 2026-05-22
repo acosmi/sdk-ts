@@ -16,7 +16,7 @@ import {
   ScopeComplianceReportsRead,
   ScopeComplianceReportsWrite,
   ScopeComplianceReportsPublish,
-} from '../src/scopes';
+} from '../src/compliance/scopes';
 
 describe('compliance scopes', () => {
   it('13 个 scope 字面量保持稳定', () => {

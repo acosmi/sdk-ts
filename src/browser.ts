@@ -10,4 +10,4 @@ export * from './index';
 
 // 覆盖默认 store 选择策略 — 浏览器 build 时 Client constructor 会按平台检测,
 // 但显式 export 给调用方更明确。
-export { LocalStorageTokenStore as DefaultBrowserTokenStore } from './store';
+export { LocalStorageTokenStore as DefaultBrowserTokenStore } from './core/store';

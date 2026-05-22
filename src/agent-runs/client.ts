@@ -1,0 +1,679 @@
+// client/agent-runs.ts — SDK-facing Agent Run Gateway client.
+
+import type { APIResponse } from '../shared/api-response';
+import { apiResponseBusinessError } from '../shared/api-response';
+import { Client } from '../core/client';
+import {
+  iterSSELines,
+  maxDownloadSize,
+  maxErrorBodySize,
+  parseHTTPErrorWithHeader,
+  readLimited,
+} from '../core/http';
+import {
+  AgentRunStreamError,
+  type AgentRun,
+  type AgentRunArtifact,
+  type AgentRunCreateRequest,
+  type AgentRunCreateResponse,
+  type AgentRunDownload,
+  type AgentRunLocalToolHandler,
+  type AgentRunLocalToolResult,
+  type AgentRunRunOptions,
+  type AgentRunStatus,
+  type AgentRunStreamEvent,
+  type AgentRunStreamOptions,
+  type AgentRunWithLocalToolsOptions,
+} from './types';
+
+declare module '@acosmi/sdk-ts' {
+  interface Client {
+    /** SDK-facing cloud agent run gateway. */
+    readonly agentRuns: AgentRunsClient;
+  }
+}
+
+const agentRunsByClient = new WeakMap<Client, AgentRunsClient>();
+
+Object.defineProperty(Client.prototype, 'agentRuns', {
+  configurable: true,
+  enumerable: false,
+  get(this: Client): AgentRunsClient {
+    let existing = agentRunsByClient.get(this);
+    if (!existing) {
+      existing = new AgentRunsClient(this);
+      agentRunsByClient.set(this, existing);
+    }
+    return existing;
+  },
+});
+
+export class AgentRunsClient {
+  constructor(private readonly client: Client) {}
+
+  async create(
+    req: AgentRunCreateRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentRunCreateResponse> {
+    const resp = await this.requestAPI<WireAgentRunCreateResponse>(
+      'POST',
+      '/agent-runs',
+      toWireCreateRequest(req),
+      signal,
+      { retryOn401: false },
+    );
+    return fromWireCreateResponse(resp);
+  }
+
+  get(runId: string, signal?: AbortSignal): Promise<AgentRun> {
+    return this.requestAPI<WireAgentRun>(
+      'GET',
+      `/agent-runs/${encodeURIComponent(runId)}`,
+      null,
+      signal,
+      { retryOn401: true },
+    ).then(fromWireRun);
+  }
+
+  stream(
+    runId: string,
+    opts: AgentRunStreamOptions = {},
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentRunStreamEvent> {
+    return {
+      [Symbol.asyncIterator]: () => this.streamGen(runId, opts, signal),
+    };
+  }
+
+  cancel(runId: string, signal?: AbortSignal): Promise<AgentRun> {
+    return this.requestAPI<WireAgentRun>(
+      'POST',
+      `/agent-runs/${encodeURIComponent(runId)}/cancel`,
+      {},
+      signal,
+      { retryOn401: false },
+    ).then(fromWireRun);
+  }
+
+  listArtifacts(runId: string, signal?: AbortSignal): Promise<AgentRunArtifact[]> {
+    return this.requestAPI<WireAgentRunArtifactList>(
+      'GET',
+      `/agent-runs/${encodeURIComponent(runId)}/artifacts`,
+      null,
+      signal,
+      { retryOn401: true },
+    ).then((r) => (r.artifacts ?? []).map(fromWireArtifact));
+  }
+
+  async downloadArtifact(
+    runId: string,
+    artifactId: string,
+    signal?: AbortSignal,
+  ): Promise<AgentRunDownload> {
+    const resp = await this.requestRaw(
+      'GET',
+      `/agent-runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      null,
+      signal,
+      { retryOn401: true },
+    );
+    const contentType = resp.headers.get('Content-Type') ?? undefined;
+    const filename = filenameFromContentDisposition(resp.headers.get('Content-Disposition')) ?? artifactId;
+    const data = await readLimited(resp.body!, maxDownloadSize);
+    return { data, filename, contentType };
+  }
+
+  submitLocalToolResult(
+    runId: string,
+    result: AgentRunLocalToolResult,
+    signal?: AbortSignal,
+  ): Promise<AgentRun> {
+    return this.requestAPI<WireAgentRun>(
+      'POST',
+      `/agent-runs/${encodeURIComponent(runId)}/local-tool-results`,
+      toWireLocalToolResult(result),
+      signal,
+      { retryOn401: false },
+    ).then(fromWireRun);
+  }
+
+  run(
+    req: AgentRunCreateRequest,
+    opts: AgentRunRunOptions = {},
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentRunStreamEvent> {
+    return {
+      [Symbol.asyncIterator]: () => this.runGen(req, opts, signal),
+    };
+  }
+
+  runWithLocalTools(
+    req: AgentRunCreateRequest,
+    handlers: Record<string, AgentRunLocalToolHandler>,
+    opts: AgentRunWithLocalToolsOptions = {},
+    signal?: AbortSignal,
+  ): AsyncIterable<AgentRunStreamEvent> {
+    return {
+      [Symbol.asyncIterator]: () => this.runWithLocalToolsGen(req, handlers, opts, signal),
+    };
+  }
+
+  private async *runGen(
+    req: AgentRunCreateRequest,
+    opts: AgentRunRunOptions,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentRunStreamEvent, void, void> {
+    const created = await this.create(req, signal);
+    yield* this.stream(created.runId, opts, signal);
+  }
+
+  private async *runWithLocalToolsGen(
+    req: AgentRunCreateRequest,
+    handlers: Record<string, AgentRunLocalToolHandler>,
+    opts: AgentRunWithLocalToolsOptions,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentRunStreamEvent, void, void> {
+    let currentRunId = '';
+    for await (const event of this.run(req, opts, signal)) {
+      if (event.type === 'run_started') {
+        currentRunId = event.runId;
+      }
+
+      if (opts.onEvent) await opts.onEvent(event);
+
+      let localToolTask: Promise<void> | undefined;
+      if (event.type === 'local_tool_request') {
+        if (currentRunId === '') {
+          throw new Error('local tool request arrived before run_started');
+        }
+        localToolTask = this.invokeLocalTool(currentRunId, event, handlers, opts.timeoutMs, signal).then(async (result) => {
+          await this.submitLocalToolResult(currentRunId, result, signal);
+        });
+      }
+
+      yield event;
+      if (localToolTask) await localToolTask;
+    }
+  }
+
+  private async invokeLocalTool(
+    runId: string,
+    event: Extract<AgentRunStreamEvent, { type: 'local_tool_request' }>,
+    handlers: Record<string, AgentRunLocalToolHandler>,
+    timeoutMs = 30_000,
+    signal?: AbortSignal,
+  ): Promise<AgentRunLocalToolResult> {
+    const handler = handlers[event.name];
+    if (!handler) {
+      return {
+        requestId: event.requestId,
+        ok: false,
+        error: `local tool rejected: no handler for ${event.name}`,
+      };
+    }
+
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    let parentAbort: (() => void) | undefined;
+    if (signal) {
+      if (signal.aborted) ctl.abort();
+      else {
+        parentAbort = () => ctl.abort();
+        signal.addEventListener('abort', parentAbort);
+      }
+    }
+
+    try {
+      const content = await handler(event.input, {
+        runId,
+        requestId: event.requestId,
+        name: event.name,
+        signal: ctl.signal,
+      });
+      return { requestId: event.requestId, ok: true, content };
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      const timedOut = ctl.signal.aborted;
+      return {
+        requestId: event.requestId,
+        ok: false,
+        error: timedOut ? `local tool timed out after ${timeoutMs}ms` : errorMessage(e),
+      };
+    } finally {
+      clearTimeout(timer);
+      if (parentAbort && signal) signal.removeEventListener('abort', parentAbort);
+    }
+  }
+
+  private async *streamGen(
+    runId: string,
+    opts: AgentRunStreamOptions,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentRunStreamEvent, void, void> {
+    const resp = await this.requestRaw(
+      'GET',
+      `/agent-runs/${encodeURIComponent(runId)}/stream`,
+      null,
+      signal,
+      { retryOn401: true, accept: 'text/event-stream' },
+    );
+    if (!resp.body) {
+      throw new Error('agent run stream: empty response body');
+    }
+
+    for await (const event of readAgentRunEvents(resp.body)) {
+      if (event.type === 'error' && opts.throwOnError !== false) {
+        throw new AgentRunStreamError(event);
+      }
+      yield event;
+    }
+  }
+
+  private async requestAPI<T>(
+    method: string,
+    path: string,
+    body: unknown | null,
+    signal: AbortSignal | undefined,
+    opts: RequestOptions,
+  ): Promise<T> {
+    const resp = await this.requestRaw(method, path, body, signal, opts);
+    const text = await resp.text();
+    const result = JSON.parse(text) as APIResponse<T>;
+    const bizErr = apiResponseBusinessError(result);
+    if (bizErr) throw bizErr;
+    return result.data;
+  }
+
+  private async requestRaw(
+    method: string,
+    path: string,
+    body: unknown | null,
+    signal: AbortSignal | undefined,
+    opts: RequestOptions,
+    retried = false,
+  ): Promise<Response> {
+    const token = await this.client.ensureToken(signal);
+    const url = this.client.apiURL(path);
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      Accept: opts.accept ?? 'application/json',
+    };
+    let bodyStr: string | undefined;
+    if (body != null) {
+      bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const resp = await this.client.doRequest({ method, url, headers, body: bodyStr }, signal);
+
+    if (resp.status === 401 && opts.retryOn401 && !retried) {
+      try {
+        await resp.body?.cancel();
+      } catch {}
+      await this.client.forceRefresh(signal);
+      return this.requestRaw(method, path, body, signal, opts, true);
+    }
+
+    if (resp.status < 200 || resp.status >= 300) {
+      const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+      throw parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+    }
+    return resp;
+  }
+}
+
+interface RequestOptions {
+  retryOn401: boolean;
+  accept?: string;
+}
+
+interface WireAgentRunCreateRequest {
+  app_id: string;
+  mode?: string;
+  session_id?: string;
+  input: string;
+  messages?: unknown[];
+  model?: string;
+  active_skill_ids?: string[];
+  knowledge_base_ids?: string[];
+  metadata?: Record<string, string>;
+  local_context_policy?: {
+    enabled?: boolean;
+    readonly?: boolean;
+    max_bytes?: number;
+    allowed_tools?: string[];
+  };
+  artifact_policy?: {
+    enabled?: boolean;
+    max_files?: number;
+  };
+}
+
+interface WireAgentRun {
+  run_id?: string;
+  session_id?: string;
+  app_id?: string;
+  mode?: string;
+  status?: string;
+  created_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  error?: unknown;
+  metadata?: Record<string, string>;
+}
+
+interface WireAgentRunCreateResponse {
+  run_id?: string;
+  session_id?: string;
+  status?: string;
+}
+
+interface WireAgentRunArtifact {
+  id?: string;
+  artifact_id?: string;
+  filename?: string;
+  name?: string;
+  content_type?: string;
+  mime_type?: string;
+  size?: number;
+  type?: string;
+  metadata?: Record<string, string>;
+}
+
+interface WireAgentRunArtifactList {
+  artifacts?: WireAgentRunArtifact[];
+}
+
+function toWireCreateRequest(req: AgentRunCreateRequest): WireAgentRunCreateRequest {
+  return {
+    app_id: req.appId,
+    mode: req.mode,
+    session_id: req.sessionId,
+    input: req.input,
+    messages: req.messages,
+    model: req.model,
+    active_skill_ids: req.activeSkillIds,
+    knowledge_base_ids: req.knowledgeBaseIds,
+    metadata: req.metadata,
+    local_context_policy: req.localContextPolicy
+      ? {
+          enabled: req.localContextPolicy.enabled,
+          readonly: req.localContextPolicy.readonly,
+          max_bytes: req.localContextPolicy.maxBytes,
+          allowed_tools: req.localContextPolicy.allowedTools,
+        }
+      : undefined,
+    artifact_policy: req.artifactPolicy
+      ? {
+          enabled: req.artifactPolicy.enabled,
+          max_files: req.artifactPolicy.maxFiles,
+        }
+      : undefined,
+  };
+}
+
+function toWireLocalToolResult(result: AgentRunLocalToolResult): Record<string, unknown> {
+  return {
+    request_id: result.requestId,
+    ok: result.ok,
+    content: result.content,
+    error: result.error,
+  };
+}
+
+function fromWireCreateResponse(resp: WireAgentRunCreateResponse): AgentRunCreateResponse {
+  return {
+    runId: resp.run_id ?? '',
+    sessionId: resp.session_id ?? '',
+    status: toStatus(resp.status),
+  };
+}
+
+function fromWireRun(resp: WireAgentRun): AgentRun {
+  return {
+    runId: resp.run_id ?? '',
+    sessionId: resp.session_id ?? '',
+    appId: resp.app_id,
+    mode: resp.mode,
+    status: toStatus(resp.status),
+    createdAt: resp.created_at,
+    startedAt: resp.started_at,
+    completedAt: resp.completed_at,
+    error: normalizeError(resp.error),
+    metadata: resp.metadata,
+  };
+}
+
+function fromWireArtifact(resp: WireAgentRunArtifact): AgentRunArtifact {
+  return {
+    id: resp.id ?? resp.artifact_id ?? '',
+    filename: resp.filename ?? resp.name ?? resp.id ?? resp.artifact_id ?? 'artifact',
+    contentType: resp.content_type ?? resp.mime_type,
+    size: typeof resp.size === 'number' ? resp.size : undefined,
+    type: resp.type,
+    metadata: resp.metadata,
+  };
+}
+
+async function* readAgentRunEvents(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<AgentRunStreamEvent, void, void> {
+  let eventName = '';
+  let dataLines: string[] = [];
+
+  const flush = (): AgentRunStreamEvent | null => {
+    if (dataLines.length === 0) return null;
+    const data = dataLines.join('\n');
+    dataLines = [];
+    if (data === '[DONE]') return null;
+    return parseAgentRunEvent(eventName, data);
+  };
+
+  for await (const line of iterSSELines(body)) {
+    if (line === '') {
+      const event = flush();
+      eventName = '';
+      if (event) yield event;
+      continue;
+    }
+    if (line.startsWith(':')) continue;
+    if (line.startsWith('event:')) {
+      eventName = line.slice('event:'.length).trim();
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart());
+    }
+  }
+
+  const event = flush();
+  if (event) yield event;
+}
+
+function parseAgentRunEvent(eventName: string, data: string): AgentRunStreamEvent {
+  const payload = JSON.parse(data) as unknown;
+  const obj = isRecord(payload) ? payload : { type: eventName, data: payload };
+  const type = stringField(obj, 'type') || eventName;
+
+  switch (type) {
+    case 'run_started':
+      return {
+        type: 'run_started',
+        runId: stringField(obj, 'run_id', 'runId'),
+        sessionId: stringField(obj, 'session_id', 'sessionId'),
+      };
+    case 'status':
+      return {
+        type: 'status',
+        status: stringField(obj, 'status'),
+        message: optionalStringField(obj, 'message'),
+      };
+    case 'text_delta':
+      return { type: 'text_delta', text: stringField(obj, 'text') };
+    case 'reasoning_delta':
+      return { type: 'reasoning_delta', text: stringField(obj, 'text') };
+    case 'tool_call':
+      return {
+        type: 'tool_call',
+        id: stringField(obj, 'id'),
+        name: stringField(obj, 'name'),
+        input: obj.input,
+      };
+    case 'tool_result':
+      return {
+        type: 'tool_result',
+        id: stringField(obj, 'id'),
+        name: optionalStringField(obj, 'name'),
+        result: obj.result,
+        error: optionalStringField(obj, 'error'),
+      };
+    case 'local_tool_request':
+      return {
+        type: 'local_tool_request',
+        requestId: stringField(obj, 'request_id', 'requestId'),
+        name: stringField(obj, 'name'),
+        input: obj.input,
+      };
+    case 'artifact':
+      return {
+        type: 'artifact',
+        artifact: fromWireArtifact((isRecord(obj.artifact) ? obj.artifact : obj) as WireAgentRunArtifact),
+      };
+    case 'sources':
+      return { type: 'sources', sources: obj.sources };
+    case 'usage':
+      return {
+        type: 'usage',
+        usage: normalizeUsage(isRecord(obj.usage) ? obj.usage : obj),
+      };
+    case 'settle':
+      return {
+        type: 'settle',
+        settlement: normalizeSettlement(isRecord(obj.settlement) ? obj.settlement : obj),
+      };
+    case 'error':
+      return { type: 'error', error: normalizeError(obj.error) ?? normalizeError(obj)! };
+    case 'done':
+      return {
+        type: 'done',
+        runId: stringField(obj, 'run_id', 'runId'),
+        status: stringField(obj, 'status'),
+      };
+    default:
+      return {
+        type: 'error',
+        error: {
+          code: 'unknown_event',
+          message: `unknown agent run event: ${type}`,
+          raw: obj,
+        },
+      };
+  }
+}
+
+function normalizeUsage(value: Record<string, unknown>) {
+  return {
+    ...value,
+    inputTokens: numberField(value, 'input_tokens', 'inputTokens'),
+    outputTokens: numberField(value, 'output_tokens', 'outputTokens'),
+    totalTokens: numberField(value, 'total_tokens', 'totalTokens'),
+    cacheReadTokens: numberField(value, 'cache_read_tokens', 'cacheReadTokens'),
+    cacheCreateTokens: numberField(value, 'cache_create_tokens', 'cacheCreateTokens'),
+    exact: booleanField(value, 'exact'),
+    source: optionalStringField(value, 'source'),
+  };
+}
+
+function normalizeSettlement(value: Record<string, unknown>) {
+  return {
+    ...value,
+    requestId: optionalStringField(value, 'request_id', 'requestId'),
+    status: optionalStringField(value, 'status'),
+    consumeStatus: optionalStringField(value, 'consume_status', 'consumeStatus'),
+    inputTokens: numberField(value, 'input_tokens', 'inputTokens'),
+    outputTokens: numberField(value, 'output_tokens', 'outputTokens'),
+    totalTokens: numberField(value, 'total_tokens', 'totalTokens'),
+    cacheReadTokens: numberField(value, 'cache_read_tokens', 'cacheReadTokens'),
+    cacheCreateTokens: numberField(value, 'cache_create_tokens', 'cacheCreateTokens'),
+    tokenRemaining: numberField(value, 'token_remaining', 'tokenRemaining'),
+    callRemaining: numberField(value, 'call_remaining', 'callRemaining'),
+    retryQueued: booleanField(value, 'retry_queued', 'retryQueued'),
+    exact: booleanField(value, 'exact'),
+  };
+}
+
+function normalizeError(value: unknown): { code?: string; message: string; stage?: string; retryable?: boolean; raw?: unknown } | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return { message: value, raw: value };
+  if (!isRecord(value)) return { message: String(value), raw: value };
+  return {
+    code: optionalStringField(value, 'code', 'error_code', 'errorCode'),
+    message: stringField(value, 'message', 'error') || 'agent run failed',
+    stage: optionalStringField(value, 'stage'),
+    retryable: typeof value.retryable === 'boolean' ? value.retryable : undefined,
+    raw: value,
+  };
+}
+
+function toStatus(status: string | undefined): AgentRunStatus {
+  switch (status) {
+    case 'running':
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+      return status;
+    default:
+      return 'queued';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringField(obj: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string') return value;
+  }
+  return '';
+}
+
+function optionalStringField(obj: Record<string, unknown>, ...keys: string[]): string | undefined {
+  const value = stringField(obj, ...keys);
+  return value === '' ? undefined : value;
+}
+
+function numberField(obj: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function booleanField(obj: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'boolean') return value;
+  }
+  return undefined;
+}
+
+function filenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(value);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch {
+      return utf8[1];
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(value);
+  return plain?.[1] ?? null;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}

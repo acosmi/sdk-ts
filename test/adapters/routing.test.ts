@@ -4,8 +4,8 @@
 // 这是 P0 红线测试 — 双产品消费 SDK 的源头.
 
 import { describe, it, expect } from 'vitest';
-import { getAdapterForModel, ProviderFormat } from '../../src/adapters/index';
-import type { ManagedModel } from '../../src/types';
+import { getAdapterForModel, ProviderFormat } from '../../src/models/adapters/index';
+import type { ManagedModel } from '../../src/models/types';
 
 const baseModel: Omit<ManagedModel, 'provider' | 'preferred_format' | 'supported_formats'> = {
   id: 'm1',

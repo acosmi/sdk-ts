@@ -21,7 +21,7 @@
     "rootDir": "src",
     "baseUrl": ".",
     "paths": {
-      "@acosmi/sdk-ts": ["./src/client.ts"]
+      "@acosmi/sdk-ts": ["./src/core/client.ts"]
     }
   },
   "include": ["src/**/*"],
