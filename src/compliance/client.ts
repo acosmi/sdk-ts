@@ -67,9 +67,11 @@ import type {
   ApproveSealApprovalQuery,
   CancelSealApprovalQuery,
   ListSealApprovalsRequest,
+  ListSealUsesRequest,
   RejectSealApprovalQuery,
   SealApproval,
   SealApprovalPageItem,
+  SealUsePageItem,
   SubmitSealApprovalRequest,
 } from './seal-approval/types';
 import type {
@@ -727,6 +729,34 @@ export class ComplianceClient {
     return this.read<PageResult<SealApprovalPageItem>>(
       'GET',
       `/compliance/seal-approvals/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
+      null,
+      signal,
+    );
+  }
+
+  // =========================================================================
+  // Seal Use (read-only — compliance gateway S6 / gap-register U-4)
+  // =========================================================================
+
+  /**
+   * 读 — 用印执行记录分页列表（compliance gateway S6）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。返回 yudao `PageResult<T>`
+   * （`{ total, list }`）。一次用印执行（seal use）描述 envelope / contract /
+   * seal / 审批联动后【真正调用 provider 落章】的那一笔记录，与 envelope
+   * 领域状态正交。所有过滤项可选；`createTimeStart` / `createTimeEnd` 由调用方
+   * 按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。
+   *
+   * 与后端复用同一只读 scope `CONTRACT_SIGNING_READ`
+   *（{@link ScopeComplianceContractSigningRead}）——不引入新 scope。
+   */
+  listSealUses(
+    req: ListSealUsesRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<SealUsePageItem>> {
+    return this.read<PageResult<SealUsePageItem>>(
+      'GET',
+      `/compliance/seal-uses/page${pageQuery(req, ['sealId', 'envelopeId', 'usageStatus', 'createTimeStart', 'createTimeEnd'])}`,
       null,
       signal,
     );

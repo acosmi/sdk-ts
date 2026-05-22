@@ -102,3 +102,54 @@ export interface ListSealApprovalsRequest extends PageRequest {
   /** 创建时间上界，`yyyy-MM-dd HH:mm:ss`。 */
   createTimeEnd?: string;
 }
+
+// =============================================================================
+// Seal Use — List / Page (compliance gateway S6 — gap-register U-4)
+// =============================================================================
+
+/**
+ * 用印执行记录分页【列表项】视图。对应后端 G6 `SealUsePageItem`。
+ *
+ * 一次用印执行（seal use）描述【该次盖章动作本身】的执行进度——envelope /
+ * contract / seal / 审批联动后真正调用 provider 落章的那一笔记录，与
+ * envelope 领域状态正交。SDK-safe 视图——不含 provider raw payload / 证书 /
+ * storage key。时间字段为 ISO-8601 字符串。
+ */
+export interface SealUsePageItem {
+  id: number;
+  envelopeId: number;
+  contractId: number;
+  sealId: number;
+  /** 用印执行状态。 */
+  usageStatus: string;
+  /** 签署位置类型（坐标 / 关键字 / 域字段等）。 */
+  signLocationType?: string | null;
+  /** 调起时间 ISO-8601。 */
+  invokedAt?: string | null;
+  /** 成功落章时间 ISO-8601。 */
+  consumedAt?: string | null;
+  /** 失败时的错误原因（如有）。 */
+  failureReason?: string | null;
+  /** 创建时间 ISO-8601。 */
+  createTime: string;
+}
+
+/**
+ * `listSealUses` 请求参数。
+ *
+ * 继承 {@link PageRequest} 分页 / 排序字段；全部可选。`createTimeStart` /
+ * `createTimeEnd` 为调用方提供的【原样字符串】，后端按 `yyyy-MM-dd HH:mm:ss`
+ * 解析；SDK 不做格式校验或时区转换。
+ */
+export interface ListSealUsesRequest extends PageRequest {
+  /** 印章 id 过滤。 */
+  sealId?: number;
+  /** 签署 envelope id 过滤。 */
+  envelopeId?: number;
+  /** 用印执行状态过滤。 */
+  usageStatus?: string;
+  /** 创建时间下界，`yyyy-MM-dd HH:mm:ss`。 */
+  createTimeStart?: string;
+  /** 创建时间上界，`yyyy-MM-dd HH:mm:ss`。 */
+  createTimeEnd?: string;
+}

@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-4 用印
+> 执行记录 — compliance gateway S6**：在 `client.compliance.*` 上新增 1 个用印
+> 执行（seal use）分页只读方法，对接已合并的后端 **G6** 契约。**纯增量、向后
+> 兼容**——不改任何既有导出符号的签名或行为；8 个占位命名空间维持 `export {}`；
+> `typecheck` / `lint` / `vitest` / `build` / `test:pack` / `docs` 全绿。
+
+### Added
+
+- **`client.compliance.listSealUses(req?, signal?)`** —
+  `GET /compliance/seal-uses/page`，返回 `PageResult<SealUsePageItem>`。
+  **GET 读**——继承 `PageRequest`，过滤支持 `sealId` / `envelopeId` /
+  `usageStatus` / `createTimeStart` / `createTimeEnd`。一次用印执行（seal use）
+  描述 envelope / contract / seal / 审批联动后【真正调用 provider 落章】的那
+  一笔记录，与 envelope 领域状态正交。SDK-safe——不含 provider raw payload /
+  证书 / storage key。
+- **新增 2 个 compliance 领域类型**（`src/compliance/seal-approval/types.ts`，
+  与既有 seal-domain 类型同模块）：`SealUsePageItem` / `ListSealUsesRequest`。
+  经 `compliance/index.ts` barrel 对外导出。
+
+### Unchanged
+
+- **Scope**：复用既有 `ScopeComplianceContractSigningRead`
+  (`compliance:contract_signing:read`) ——后端 G6 端点声明同一 read scope，
+  不新增 scope。
+- **印章授权 / 印章 CRUD（U-3 / U-11）**：仍为后端推迟项（CFCA 私有 jar /
+  W3 闸门），本版本不引入 SDK 方法。
+
+> Method Status：`listSealUses` 为 `production-ready`（compliance gateway S6 /
+> G6 契约、端点、DTO、SDK 测试、文档全部闭环）。
+
+---
+
 ## [1.10.0] — 2026-05-22
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
