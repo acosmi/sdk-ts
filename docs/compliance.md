@@ -244,7 +244,7 @@ if (view.status === 'SUCCESS') {
 
 ## Paginated Lists
 
-Since v1.6.0 the SDK exposes six paginated list reads against the backend
+Since v1.6.0 the SDK exposes paginated list reads against the backend
 compliance gateway (`GET .../page`). Each returns a yudao `PageResult<T>`
 (`{ total, list }` — the single SDK-wide pagination result shape, an alias of
 `YudaoPageResult<T>`):
@@ -258,6 +258,7 @@ client.compliance.listEvidencePackages(req?, signal?):  Promise<PageResult<Evide
 client.compliance.listReports(req?, signal?):           Promise<PageResult<ReportPageItem>>;
 client.compliance.listSigningEnvelopes(req?, signal?):  Promise<PageResult<SigningEnvelopePageItem>>;
 client.compliance.listSealApprovals(req?, signal?):     Promise<PageResult<SealApprovalPageItem>>;
+client.compliance.listSealUses(req?, signal?):          Promise<PageResult<SealUsePageItem>>;
 ```
 
 The request argument is optional. It extends the shared `PageRequest`
@@ -272,6 +273,7 @@ let the backend pick defaults) plus per-method filters:
 | `listReports` | `GET /compliance/reports/page` | `status`, `createTimeStart`, `createTimeEnd` |
 | `listSigningEnvelopes` | `GET /compliance/signing-envelopes/page` | `status`, `createTimeStart`, `createTimeEnd` |
 | `listSealApprovals` | `GET /compliance/seal-approvals/page` | `status`, `createTimeStart`, `createTimeEnd` |
+| `listSealUses` | `GET /compliance/seal-uses/page` | `sealId`, `envelopeId`, `usageStatus`, `createTimeStart`, `createTimeEnd` |
 
 `createTimeStart` / `createTimeEnd` are caller-supplied datetime **strings**. The
 backend parses them as `yyyy-MM-dd HH:mm:ss` (for example
@@ -299,9 +301,32 @@ and supports status / time filtering.
 
 The `*PageItem` types (`EvidenceAssetPageItem`, `TimestampPageItem`,
 `EvidencePackagePageItem`, `ReportPageItem`, `SigningEnvelopePageItem`,
-`SealApprovalPageItem`) are the SDK-safe subset of the corresponding detail view
-plus a `createTime` (ISO-8601) field. They never expose provider raw payloads,
-certificates, storage keys, or contract originals.
+`SealApprovalPageItem`, `SealUsePageItem`) are the SDK-safe subset of the
+corresponding detail view plus a `createTime` (ISO-8601) field. They never
+expose provider raw payloads, certificates, storage keys, or contract originals.
+
+`listSealUses` (compliance gateway S6) returns one row per **seal use** — the
+real `provider`-side seal application that fires after envelope / contract /
+seal / approval are linked. It is orthogonal to the envelope domain status and
+to the seal-approval workflow:
+
+- `listSigningEnvelopes` → high-level envelope domain state.
+- `listSealApprovals` → the approval workflow on an envelope (`PENDING` →
+  `APPROVED` / `REJECTED` / `CANCELED`).
+- `listSealUses` → the actual seal-application execution
+  (`invokedAt` → `consumedAt`, with `failureReason` on terminal failure).
+
+`SealUsePageItem` fields: `id` (number), `envelopeId` (number), `contractId`
+(number), `sealId` (number), `usageStatus` (string), `signLocationType`
+(string?), `invokedAt` (string?), `consumedAt` (string?), `failureReason`
+(string?), `createTime` (string — ISO-8601).
+
+`listSealUses` reuses the existing read scope
+`ScopeComplianceContractSigningRead` (`compliance:contract_signing:read`); it
+does not introduce a new scope. The seal authorization surface and the full
+seal CRUD (gap-register U-3 / U-11) remain backend-deferred behind the CFCA
+private jar and the W3 gate, and are not exposed as SDK methods in this
+release.
 
 ## Capabilities And Operation Projection
 
@@ -649,7 +674,7 @@ for them.
 
 | Status | Methods | Meaning |
 | --- | --- | --- |
-| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `listEnvelopeContracts`, `listEnvelopeProviderRequests`, `voidEnvelope`, `createContractTemplate`, `updateContractTemplate`, `deleteContractTemplate`, `getContractTemplate`, `listContractTemplates`, `uploadContractTemplatePdf`, `publishContractTemplate`, `archiveContractTemplate`, `listContractTemplateVersions`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `listEnvelopeContracts`, `listEnvelopeProviderRequests`, `voidEnvelope`, `createContractTemplate`, `updateContractTemplate`, `deleteContractTemplate`, `getContractTemplate`, `listContractTemplates`, `uploadContractTemplatePdf`, `publishContractTemplate`, `archiveContractTemplate`, `listContractTemplateVersions`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `listSealUses`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
 | `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
 | `draft contract` | binary download helpers | Type drafts only — not exposed as callable capability in this release. |
 | `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
@@ -687,6 +712,14 @@ are GET (one safe `401` refresh-and-replay); writes accept `Idempotency-Key`,
 do not auto-retry, and do not refresh/replay on `401`. None of them require
 step-up. `updateContractTemplate` and `deleteContractTemplate` are
 DRAFT-only — the backend refuses both on `PUBLISHED` / `ARCHIVED` templates.
+
+`listSealUses` is `production-ready` against the compliance gateway S6 (`G6`)
+contract — endpoint, DTO, SDK tests, and docs are closed. It is a read-only
+GET projection (one safe `401` refresh-and-replay) and reuses the existing
+`ScopeComplianceContractSigningRead` scope; no new scope is introduced. The
+broader seal authorization layer and seal CRUD surface (gap-register U-3 /
+U-11) remain backend-deferred behind the CFCA private jar and the W3 gate;
+they are intentionally **not** exposed as SDK methods in this release.
 
 ## Safety Boundary
 

@@ -14,6 +14,7 @@ import type {
   OperationPageItem,
   ReportPageItem,
   SealApprovalPageItem,
+  SealUsePageItem,
   SigningEnvelopePageItem,
   TimestampPageItem,
 } from '../src/index';
@@ -350,5 +351,87 @@ describe('ComplianceClient — listSealApprovals', () => {
     const client = clientWith(fetch);
     await client.compliance.listSealApprovals();
     expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer token-1' });
+  });
+});
+
+describe('ComplianceClient — listSealUses (S6)', () => {
+  it('GETs /compliance/seal-uses/page and unwraps PageResult', async () => {
+    const item: SealUsePageItem = {
+      id: 41,
+      envelopeId: 11,
+      contractId: 21,
+      sealId: 7,
+      usageStatus: 'CONSUMED',
+      signLocationType: 'KEYWORD',
+      invokedAt: '2026-05-22T10:00:00',
+      consumedAt: '2026-05-22T10:00:05',
+      createTime: '2026-05-22T10:00:00',
+    };
+    const { fetch, calls } = captureFetch(() =>
+      jsonResponse({ code: 0, data: { total: 1, list: [item] } }),
+    );
+    const client = clientWith(fetch);
+    const page = await client.compliance.listSealUses();
+    expect(calls[0].url).toContain('/admin-api/compliance/seal-uses/page');
+    expect(calls[0].url).not.toContain('/api/v4');
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer token-1' });
+    expect(page.total).toBe(1);
+    expect(page.list).toHaveLength(1);
+    expect(page.list[0].id).toBe(41);
+    expect(page.list[0].usageStatus).toBe('CONSUMED');
+    expect(page.list[0].consumedAt).toBe('2026-05-22T10:00:05');
+  });
+
+  it('serializes pageNo/pageSize + sealId/envelopeId/usageStatus/createTime* filters into query', async () => {
+    const { fetch, calls } = captureFetch(() =>
+      jsonResponse({ code: 0, data: { total: 0, list: [] } }),
+    );
+    const client = clientWith(fetch);
+    await client.compliance.listSealUses({
+      pageNo: 2,
+      pageSize: 50,
+      sealId: 7,
+      envelopeId: 11,
+      usageStatus: 'CONSUMED',
+      createTimeStart: '2026-05-01 00:00:00',
+      createTimeEnd: '2026-05-22 23:59:59',
+    });
+    const q = queryOf(calls[0].url);
+    expect(q.get('pageNo')).toBe('2');
+    expect(q.get('pageSize')).toBe('50');
+    expect(q.get('sealId')).toBe('7');
+    expect(q.get('envelopeId')).toBe('11');
+    expect(q.get('usageStatus')).toBe('CONSUMED');
+    expect(q.get('createTimeStart')).toBe('2026-05-01 00:00:00');
+    expect(q.get('createTimeEnd')).toBe('2026-05-22 23:59:59');
+  });
+
+  it('omits empty filters — no query string when called with no args', async () => {
+    const { fetch, calls } = captureFetch(() =>
+      jsonResponse({ code: 0, data: { total: 0, list: [] } }),
+    );
+    const client = clientWith(fetch);
+    await client.compliance.listSealUses();
+    expect(calls[0].url.endsWith('/compliance/seal-uses/page')).toBe(true);
+    expect(calls[0].url).not.toContain('?');
+  });
+
+  it('GET retries once on 401 (token refresh path)', async () => {
+    let firstSeen = false;
+    const { fetch, calls } = captureFetch(() => {
+      if (!firstSeen) {
+        firstSeen = true;
+        return emptyResponse(401);
+      }
+      return jsonResponse({ code: 0, data: { total: 0, list: [] } });
+    });
+    const client = clientWith(fetch);
+    client.forceRefresh = async () => {
+      client.tokens = { ...client.tokens!, access_token: 'token-2' };
+    };
+    const page = await client.compliance.listSealUses();
+    expect(page.total).toBe(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].init.headers).toMatchObject({ Authorization: 'Bearer token-2' });
   });
 });

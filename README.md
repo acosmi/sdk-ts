@@ -192,7 +192,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Bug Report** | `submitBugReport`, `getBugReport`                                                  |
 | **Web Search** | `newWebSearchTool` (factory)                                                       |
 | **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
-| **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`（均返回 `PageResult<T>`） |
+| **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`, `compliance.listSealUses`（均返回 `PageResult<T>`） |
 | **Compliance — 能力与操作投影** | `compliance.getCapabilities`, `compliance.getFeatureGate`, `compliance.listOperations`, `compliance.getOperation` |
 | **Compliance — TSA 只读视图** | `compliance.listTsaProviders`, `compliance.getTsaStats` |
 | **Compliance — envelope 收尾** | `compliance.listEnvelopeContracts`, `compliance.listEnvelopeProviderRequests`, `compliance.voidEnvelope`（`void` 为写、带 `Idempotency-Key`） |
@@ -473,6 +473,7 @@ client.compliance.cancelSealApproval(id, query, options?)
 client.compliance.listPendingSealApprovals(signal?)
 client.compliance.getSealApproval(id, signal?)
 client.compliance.listSealApprovals(req?, signal?)         // 分页 → PageResult
+client.compliance.listSealUses(req?, signal?)              // 用印执行分页 → PageResult
 
 client.compliance.getProviderRequest(id, signal?)
 client.compliance.waitForProviderRequestTerminal(id, opts?)
@@ -524,6 +525,13 @@ client.compliance.listContractTemplateVersions(id, signal?)          // 版本�
 > `compliance:contract_template:read` / `compliance:contract_template:write` —
 > 不要求 step-up。版本列表与列表项视图都不下发模板【字段叠加】，字段只在详情 /
 > 版本快照里返回。
+
+> compliance gateway S6 新增用印执行（seal use）分页只读方法：`listSealUses`。
+> 走 `GET /compliance/seal-uses/page`，返回 yudao `PageResult<SealUsePageItem>`；
+> 过滤支持 `sealId` / `envelopeId` / `usageStatus` / `createTimeStart` /
+> `createTimeEnd`。复用既有 `compliance:contract_signing:read` scope，不引入新
+> scope。印章授权 / 印章 CRUD（U-3 / U-11）仍为后端推迟项（CFCA 私有 jar /
+> W3 闸门），本版本不引入 SDK 方法。
 
 ### 示例
 
