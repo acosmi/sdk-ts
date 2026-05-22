@@ -1,6 +1,6 @@
 {
   "name": "@acosmi/sdk-ts",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Acosmi TypeScript SDK：模型网关、Agent Run Gateway 与 Compliance（电子证据、时间章、报告、签署 envelope）统一客户端，支持浏览器 / Node ≥18 / Deno / Bun。",
   "type": "module",
   "main": "./dist/node/index.cjs",
@@ -35,7 +35,14 @@
     },
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE", "docs/compliance.md", "examples"],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "docs/compliance.md",
+    "examples"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",

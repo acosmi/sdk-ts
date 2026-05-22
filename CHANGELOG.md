@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] — 2026-05-22
+
+### Added
+
+- **`Config.browserRefreshMode?: 'direct' | 'server-proxy' | 'none'`** 与
+  `refreshProxyURL` — 浏览器 Web OAuth token 刷新策略。默认 `direct` 保持既有行为；
+  `server-proxy` 可把刷新收口到同源 Route Handler，规避 OAuth issuer CORS 403；
+  `none` 用于产品自行处理过期登录态。新增错误码常量
+  `ErrOAuthCORSBlocked`、`ErrRefreshProxyFailed`、`ErrTokenExpired`。
+
+---
+
 ## [1.4.0] — 2026-05-21
 
 > csign `/login` Web OAuth 接入复核审计（`docs/audit/csign-login-oauth-audit-result-2026-05-21`）
