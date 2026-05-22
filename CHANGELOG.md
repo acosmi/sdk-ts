@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**Phase 0.3 /
+> 0.5**：沉淀跨域共享 DTO + 契约测试。**纯增量、向后兼容**——不改任何既有导出
+> 符号的签名或行为；`typecheck` / `lint` / `vitest`(157, +17) / `build` 全绿。
+>
+> ⚠️ 本版本**不含** `tenant` / `iam` / `apiClients` / `operations` / `audit` /
+> `gateway` / `mcp` / `certification` 8 个占位命名空间的真实导出，也不含
+> `casehall` 命名空间与 `compliance` U-1…U-12 方法——它们强依赖当前**尚不存在**
+> 的后端端点（Go 控制面 / Java compliance 分页 / `yudao-module-casehall`），
+> 提前写空转方法属编造契约（违反缺口总账 §2 边界）。待后端契约就绪后按
+> §11 Phase 1+ 推进。
+
+### Added
+
+- **`src/shared/` 跨域共享 DTO**（缺口总账 §9.4 / §9.5）——为后续平台控制面 /
+  `compliance.list*` 等命名空间提供统一原语，按关注点分文件：
+  - `shared/pagination.ts` — `PageRequest`、`SortDirection`，以及
+    **`PageResult<T>`（刻意做成既有 `YudaoPageResult<T>` 的别名**，不引入第二套
+    `{list,total}` 分页结果结构）。
+  - `shared/operation.ts` — `OperationId`、`OperationSource`、`OperationStatus`、
+    `VerifyStatus`、`IdempotencyKey` 类型与 `IdempotencyKeyHeader` 常量
+    （`'Idempotency-Key'`，写接口幂等键 header 单一真相源）；`ProviderRequestStatus`
+    **复用**既有 `ComplianceProviderRequestStatus`，不另造同名近似类型。
+  - `shared/retry-advice.ts` — `RetryAdvice` 统一失败补救模型 + `RetryAdviceReason`
+    （11 项）+ `retryReasonForComplianceKey()` / `retryReasonForOAuthError()`
+    映射函数 + `complianceErrorToRetryAdvice()` 叠加投影。`RetryAdvice` 是
+    **叠加层**——独立类型、独立字段，**不修改也不替换** `core/retry.ts`
+    `RetryPolicy` 与 `compliance/errors.ts` `ComplianceErrorInfo`；`reason` 是
+    既有三套错误码登记表（Java 数值码 / SDK 符号 key / Go OAuth 字符串）的
+    归一化映射，不开第四套登记表。
+  - `shared/principal.ts` — `PrincipalRef`、`TenantRef`、`ApiClientRef` 轻量引用。
+  - `shared/gate.ts` — `FeatureGateStatus`、`FeatureGateState`、`StepUpStatus`、
+    `GateQuota`、`BillingPreflightResult`（gate / capability / step-up / preflight
+    查询形态）。
+- `test/shared.test.ts` — 17 个契约测试，覆盖别名等价 / 幂等键常量 / reason 映射 /
+  叠加投影只读性 / `classifyComplianceError` 零回归红线。
+
+---
+
 ## [1.4.2] — 2026-05-22
 
 > `src/` 目录按业务域重组（实施计划 `docs/audit/sdk-ts-directory-restructure-plan-2026-05-22`）。

@@ -7,7 +7,7 @@
 ## 状态
 
 - 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
-- 当前版本：**1.3.2**（`verifyEvidencePublic` 匿名公开验真收口、新增 `compliance:reports:write` scope、compliance 方法状态四档分级；`1.3.0` 新增 `client.compliance`、`complianceBaseURL`、合规域 types/errors/status/scopes、示例与文档；详见 [CHANGELOG](./CHANGELOG.md)）
+- 当前版本：**1.5.0**（沉淀 `src/shared/` 跨域共享 DTO——分页 / operation / retryAdvice / principal / gate 原语；`1.4.2` `src/` 按业务域重组；`1.4.x` 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端；详见 [CHANGELOG](./CHANGELOG.md)）
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
 - API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
@@ -194,6 +194,22 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
+
+### 跨域共享 DTO（`shared`，v1.5.0）
+
+`src/shared/` 收口跨域基础设施类型，从根入口直接导出，供各业务域统一引用：
+
+| 文件 | 导出 | 说明 |
+| --- | --- | --- |
+| `pagination` | `PageRequest`、`PageResult<T>`、`SortDirection` | `PageResult<T>` 是 `YudaoPageResult<T>` 的别名，全 SDK 单一分页结果结构 |
+| `operation` | `OperationId`、`OperationSource`、`OperationStatus`、`VerifyStatus`、`IdempotencyKey`、`IdempotencyKeyHeader`、`ProviderRequestStatus` | `operationId` 跨来源关联键；`IdempotencyKeyHeader` 写接口幂等键 header 单一真相源 |
+| `retry-advice` | `RetryAdvice`、`RetryAdviceReason`、`retryReasonForComplianceKey()`、`retryReasonForOAuthError()`、`complianceErrorToRetryAdvice()` | 统一失败补救建议——**叠加**在 `RetryPolicy` / `ComplianceErrorInfo` 之上，不替换 |
+| `principal` | `PrincipalRef`、`TenantRef`、`ApiClientRef` | 轻量身份 / 租户引用 |
+| `gate` | `FeatureGateStatus`、`FeatureGateState`、`StepUpStatus`、`GateQuota`、`BillingPreflightResult` | gate / capability / step-up / preflight 查询形态 |
+
+> 这些是为后续平台控制面（`tenant` / `iam` / `operations` / `gateway` 等）与
+> `compliance` 分页 / gate 能力预沉淀的【共享原语】；消费这些类型的命名空间方法
+> 须待对应后端端点就绪后才落地，当前 8 个占位命名空间尚未从根入口导出。
 
 ### 示例：Skill 商店搜索
 
@@ -494,7 +510,11 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 1.3.2 | 当前稳定版 | `verifyEvidencePublic` 匿名公开验真链路收口（未登录不抛 `not authorized`）；新增第 13 个 compliance scope `compliance:reports:write`（创建出证报告改用写 scope）；`docs/compliance.md` 新增方法状态四档分级（production-ready / gated / draft contract / internal-only）。 |
+| 1.5.0 | 当前稳定版 | 沉淀 `src/shared/` 跨域共享 DTO（`PageRequest`/`PageResult` 别名、`OperationId`/`OperationStatus`/`IdempotencyKeyHeader`、`RetryAdvice` 叠加层、`PrincipalRef`/`TenantRef`、`FeatureGateStatus`/`StepUpStatus`/`BillingPreflightResult`）。纯增量；8 个平台控制面占位命名空间仍待后端契约就绪后落地。 |
+| 1.4.2 | 稳定版 | `src/` 从扁平 36 文件按业务域重组为 per-domain 目录；公共导出符号集合、`exports`、`dist/` 路径一字未变（纯内部重组）。新增 TypeDoc API 文档。 |
+| 1.4.1 | 稳定版 | 新增 `Config.browserRefreshMode` / `refreshProxyURL`——浏览器 Web OAuth token 刷新策略（规避 issuer CORS 403）。 |
+| 1.4.0 | 稳定版 | 新增浏览器 Web OAuth 原语 `discoverWebOAuthMetadata` / `registerWebOAuthClient`（csign `/login` Web OAuth 接入）。 |
+| 1.3.2 | 稳定版 | `verifyEvidencePublic` 匿名公开验真链路收口（未登录不抛 `not authorized`）；新增第 13 个 compliance scope `compliance:reports:write`（创建出证报告改用写 scope）；`docs/compliance.md` 新增方法状态四档分级（production-ready / gated / draft contract / internal-only）。 |
 | 1.3.1 | 稳定版 | 修订 npm 包短介绍与搜索关键词，明确模型网关、Agent Run Gateway 与 Compliance 统一客户端定位。 |
 | 1.3.0 | 稳定版 | 新增 compliance SDK client、base URL、types/errors/status/scopes、docs/examples/tests，并明确 idempotency/no-retry/no-401-replay 与 provider material 安全边界。 |
 | 1.2.0 | 稳定版 | 新增 `ManagedModel.inputModalities`、桌面视觉理解 sidecar capability 与 4 个 catalog helpers。 |
