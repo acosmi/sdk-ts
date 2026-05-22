@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] — 2026-05-21
+
+> csign `/login` Web OAuth 接入复核审计（`docs/audit/csign-login-oauth-audit-result-2026-05-21`）
+> Phase A：在 SDK 增补浏览器 Web OAuth 原语。本版本为**纯增量、向后兼容**——
+> 不改任何既有导出符号的签名或行为，桌面 loopback `login()` 流程完全不受影响。
+
+### Added
+
+- **`discoverWebOAuthMetadata(serverURL, signal?)`** — 发现 Web OAuth 服务元数据，
+  请求 `/.well-known/oauth-authorization-server/web`。与既有 `discover()`
+  （`/desktop`）共用内部 `discoverWithProfile(serverURL, profile, signal?)`，URL 解析、
+  fetch、错误处理与字段校验完全一致。`discoverWithProfile` 与
+  `OAuthMetadataProfile`（`'web' | 'desktop'`）一并导出。
+- **`registerWebOAuthClient(meta, opts, signal?)`** — 动态注册浏览器 Web OAuth
+  客户端。与 `register()`（桌面 loopback，硬编码 `redirect_uri=127.0.0.1`）的区别在于
+  允许传入任意 Web `redirectURIs`；`opts = { clientName, redirectURIs, scopes? }`，
+  注册体 `token_endpoint_auth_method: 'none'`、
+  `grant_types: ['authorization_code','refresh_token']`、`response_types: ['code']`，
+  接受 HTTP 200/201。
+- **`createWebAuthorizationRequest(meta, opts)`** — 构造 Web OAuth 授权请求：生成
+  PKCE verifier + S256 challenge + CSRF `state`，按 OAuth 2.1 拼装 authUrl
+  （`response_type=code`、`code_challenge_method=S256`、`state`、空格连接的 `scope`、
+  可选 `login_hint`）。返回 `WebAuthorizationRequest`
+  （`{ authUrl, state, verifier, clientID, redirectURI, serverURL, createdAt }`），
+  发起方应整体持久化为 pending 状态。
+- **`completeWebAuthorizationRequest(pending, params, signal?)`** — 完成 Web OAuth：
+  校验 `params.state === pending.state`（CSRF 防护，不匹配抛 `ErrStateMismatch`），
+  依次 `discoverWebOAuthMetadata` → `exchangeCode` → `newTokenSet`，返回可持久化的
+  `TokenSet`。
+- **`generateState()`** — 生成 32 字节加密随机 `state`（base64url 无填充），与
+  `generateCodeVerifier` 共用随机源。
+- **`ErrStateMismatch`（`'state_mismatch'`）** — Web OAuth callback `state` 不匹配
+  错误码，加入 `LoginErrCode` 联合类型。
+- **`Config.oauthMetadataProfile?: 'web' | 'desktop'`** — 新增客户端配置项，决定
+  **所有 token 生命周期的 metadata 发现**走哪个 well-known 端点，覆盖
+  `ensureToken()` 刷新、`forceRefresh()`（401 强制刷新）以及 `logout()` 吊销
+  （revoke）三条路径——不止 `ensureToken`。默认 `'desktop'`，未设置时对既有调用方
+  零影响；浏览器 Web OAuth 签发的 token 其 refresh / revoke 必须走 Web token /
+  revocation 端点，否则会打到桌面 loopback 端点导致刷新失败或吊销无效，故 csign 等
+  Web 应用应显式配 `'web'`。`login()` 桌面 loopback 授权路径仍固定走 `'desktop'`
+  发现，不受此配置影响。
+
+---
+
 ## [1.3.2] — 2026-05-20
 
 > 生产闭环实施计划（`Acosmi-Compliance-SDK-Csign-PC-CrabCode-生产闭环实施计划-2026-05-20`）

@@ -32,6 +32,7 @@ import {
 } from './types';
 import {
   discover,
+  discoverWithProfile,
   exchangeCode,
   exchangeCodeWithExpiry,
   refreshToken,
@@ -49,6 +50,7 @@ import {
   type LoginEvent,
   type LoginErrCode,
   type LoginOptions,
+  type OAuthMetadataProfile,
 } from './auth';
 import { type TokenStore, FileTokenStore, InMemoryTokenStore, LocalStorageTokenStore } from './store';
 import { type RetryPolicy, effectivePolicy, computeBackoff } from './retry';
@@ -135,6 +137,21 @@ export interface Config {
    * `client.compliance.*`，不与既有模型网关 API 冲突。
    */
   complianceBaseURL?: string;
+
+  /**
+   * OAuth metadata profile — 决定 `ensureToken` 刷新 token 时
+   * 发现 metadata 走哪个 well-known 端点。
+   *
+   * - `'desktop'` (默认): `/.well-known/oauth-authorization-server/desktop`
+   *   — 桌面 loopback OAuth (`login()`) 流程。
+   * - `'web'`: `/.well-known/oauth-authorization-server/web`
+   *   — 浏览器 Web OAuth (csign 等第一方 Web 应用) 签发的 token，
+   *   其 refresh 必须走 Web token 端点。
+   *
+   * 未设置时默认 `'desktop'`，对既有调用方行为完全无影响。
+   * `login()` 桌面 loopback 路径不受此配置影响。
+   */
+  oauthMetadataProfile?: OAuthMetadataProfile;
 }
 
 // =============================================================================
@@ -185,6 +202,8 @@ export class Client {
   serverURL: string;
   /** Compliance API 根地址 (已 trim 尾随 /); null = 走默认 ${serverURL}/admin-api */
   complianceBaseURL: string | null;
+  /** OAuth metadata profile — 刷新 token 时发现 metadata 用 (默认 'desktop') */
+  oauthMetadataProfile: OAuthMetadataProfile;
   /** OAuth metadata (lazy loaded) */
   meta: ServerMetadata | null = null;
   /** 当前 token (内存) */
@@ -229,6 +248,7 @@ export class Client {
     this.complianceBaseURL = cfg.complianceBaseURL
       ? cfg.complianceBaseURL.replace(/\/+$/, '')
       : null;
+    this.oauthMetadataProfile = cfg.oauthMetadataProfile ?? 'desktop';
     this.store = cfg.store ?? defaultTokenStore();
     this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.retryPolicy = effectivePolicy(cfg.retryPolicy ?? null);
@@ -440,7 +460,8 @@ export class Client {
     if (tokens) {
       if (!meta) {
         try {
-          meta = await discover(this.serverURL, signal);
+          // token-lifecycle discovery: revoke 必须打与签发 token 同 profile 的端点
+          meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
         } catch (e) {
           console.warn(`[acosmi-sdk] warning: discover for revocation failed: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -530,7 +551,7 @@ export class Client {
 
         if (this.meta == null) {
           try {
-            this.meta = await discover(this.serverURL, signal);
+            this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
           } catch (e) {
             throw new Error(
               `discover for refresh: ${e instanceof Error ? e.message : String(e)}`,
@@ -569,7 +590,8 @@ export class Client {
           throw new Error('no tokens to refresh');
         }
         if (this.meta == null) {
-          this.meta = await discover(this.serverURL, signal);
+          // token-lifecycle discovery: refresh 必须打与签发 token 同 profile 的端点
+          this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
         }
         const tokenResp = await refreshToken(
           this.meta,
