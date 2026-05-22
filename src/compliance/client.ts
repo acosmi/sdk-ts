@@ -82,6 +82,15 @@ import type {
   OperationDetail,
   OperationPageItem,
 } from './operation/types';
+import type {
+  ContractTemplatePageItem,
+  ContractTemplateResp,
+  ContractTemplateVersion,
+  CreateContractTemplateRequest,
+  ListContractTemplatesRequest,
+  UpdateContractTemplateRequest,
+  UploadContractTemplatePdfRequest,
+} from './template/types';
 import {
   classifyComplianceError,
   isComplianceBusinessError,
@@ -831,6 +840,176 @@ export class ComplianceClient {
     return this.read<OperationDetail>(
       'GET',
       `/compliance/operations/${encodeURIComponent(id)}`,
+      null,
+      signal,
+    );
+  }
+
+  // =========================================================================
+  // Contract Template (compliance gateway S5 — gap-register U-2)
+  // =========================================================================
+
+  /**
+   * 创建合同模板（写）。
+   *
+   * 走 compliance 写路径——发送前 `ensureToken` 一次、不自动重试、`401` 不刷新
+   * 重放；支持 `Idempotency-Key` header（强烈建议调用方持久化幂等键，重试 / 恢复
+   * 时复用，避免重复创建模板）。模板创建后初始状态为 `DRAFT`。
+   */
+  createContractTemplate(
+    req: CreateContractTemplateRequest,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<ContractTemplateResp> {
+    return this.write<ContractTemplateResp>(
+      'POST',
+      '/compliance/contract-templates',
+      req,
+      writeCtx(opts),
+    );
+  }
+
+  /**
+   * 更新合同模板（写，仅 DRAFT 状态）。
+   *
+   * 走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。所有字段
+   * 可选，缺省字段视为不修改。服务端在 PUBLISHED / ARCHIVED 状态下会拒绝更新。
+   */
+  updateContractTemplate(
+    id: number,
+    req: UpdateContractTemplateRequest,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<ContractTemplateResp> {
+    return this.write<ContractTemplateResp>(
+      'POST',
+      `/compliance/contract-templates/${encodeURIComponent(id)}`,
+      req,
+      writeCtx(opts),
+    );
+  }
+
+  /**
+   * 删除合同模板（写，仅 DRAFT 状态）。
+   *
+   * 走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。服务端
+   * 在 PUBLISHED / ARCHIVED 状态下会拒绝删除——已发布的模板应改走 `archive`。
+   */
+  deleteContractTemplate(
+    id: number,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<void> {
+    return this.write<void>(
+      'POST',
+      `/compliance/contract-templates/${encodeURIComponent(id)}/delete`,
+      null,
+      writeCtx(opts),
+    );
+  }
+
+  /** 读 — 合同模板详情。 */
+  getContractTemplate(
+    id: number,
+    signal?: AbortSignal,
+  ): Promise<ContractTemplateResp> {
+    return this.read<ContractTemplateResp>(
+      'GET',
+      `/compliance/contract-templates/${encodeURIComponent(id)}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — 合同模板分页列表（compliance gateway S5）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。返回 yudao `PageResult<T>`
+   * （`{ total, list }`）。所有过滤项可选；`createTimeStart` / `createTimeEnd`
+   * 由调用方按 `yyyy-MM-dd HH:mm:ss` 提供，SDK 原样透传。列表项视图
+   * {@link ContractTemplatePageItem} 不含 `fields`——字段叠加只在详情 / 版本
+   * 快照里返回。
+   */
+  listContractTemplates(
+    req: ListContractTemplatesRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<ContractTemplatePageItem>> {
+    return this.read<PageResult<ContractTemplatePageItem>>(
+      'GET',
+      `/compliance/contract-templates/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 上传合同模板 PDF（写）。
+   *
+   * 走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。请求体
+   * 为 `{ pdfBase64 }`；SDK 不在客户端做 PDF 解析 / 几何校验，原样透传给后端。
+   * 返回上传后的最新模板视图（含 `pdfHash` / `pdfPageCount`）。
+   */
+  uploadContractTemplatePdf(
+    id: number,
+    req: UploadContractTemplatePdfRequest,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<ContractTemplateResp> {
+    return this.write<ContractTemplateResp>(
+      'POST',
+      `/compliance/contract-templates/${encodeURIComponent(id)}/pdf`,
+      req,
+      writeCtx(opts),
+    );
+  }
+
+  /**
+   * 发布合同模板（写）。DRAFT → PUBLISHED，落版本快照。
+   *
+   * 走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。
+   * publish 后 `currentVersion` 递增，`fields` 与 `pdfHash` 同步固化进版本表。
+   */
+  publishContractTemplate(
+    id: number,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<ContractTemplateResp> {
+    return this.write<ContractTemplateResp>(
+      'POST',
+      `/compliance/contract-templates/${encodeURIComponent(id)}/publish`,
+      null,
+      writeCtx(opts),
+    );
+  }
+
+  /**
+   * 归档合同模板（写）。PUBLISHED → ARCHIVED。
+   *
+   * 走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。
+   * 已归档模板只读，不再允许 publish / 编辑 / 删除。
+   */
+  archiveContractTemplate(
+    id: number,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<ContractTemplateResp> {
+    return this.write<ContractTemplateResp>(
+      'POST',
+      `/compliance/contract-templates/${encodeURIComponent(id)}/archive`,
+      null,
+      writeCtx(opts),
+    );
+  }
+
+  /**
+   * 读 — 合同模板版本快照列表。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。返回 {@link ContractTemplateVersion}
+   * 普通数组（非 `PageResult`）——每次 publish 落一个不可变快照，记录当时的
+   * `name` / `pdfHash` / `fields` / `statusAtSnapshot`，是离线复核 / 版本对账
+   * 的依据。
+   */
+  listContractTemplateVersions(
+    id: number,
+    signal?: AbortSignal,
+  ): Promise<ContractTemplateVersion[]> {
+    return this.read<ContractTemplateVersion[]>(
+      'GET',
+      `/compliance/contract-templates/${encodeURIComponent(id)}/versions`,
       null,
       signal,
     );

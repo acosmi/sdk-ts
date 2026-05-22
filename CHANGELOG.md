@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.10.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-2 合同
+> 模板 — compliance gateway S5**：在 `client.compliance.*` 上新增 9 个合同模板
+> 方法 + 2 个新 scope，对接已合并的后端 **G5** 契约。**纯增量、向后兼容**——不改
+> 任何既有导出符号的签名或行为；8 个占位命名空间维持 `export {}`；`typecheck` /
+> `lint` / `vitest` / `build` / `test:pack` / `docs` 全绿。
+
+### Added
+
+- **`client.compliance.createContractTemplate(req, options?)`** —
+  `POST /compliance/contract-templates`，返回 `ContractTemplateResp`。**写方法**：
+  走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。模板创建
+  后初始状态为 `DRAFT`。
+- **`client.compliance.updateContractTemplate(id, req, options?)`** —
+  `POST /compliance/contract-templates/{id}`，仅 DRAFT 状态。返回
+  `ContractTemplateResp`。**写方法**：所有字段可选，缺省字段视为不修改。
+- **`client.compliance.deleteContractTemplate(id, options?)`** —
+  `POST /compliance/contract-templates/{id}/delete`，仅 DRAFT 状态，返回 `void`。
+  **写方法**：已发布的模板应改走 `archive`。
+- **`client.compliance.getContractTemplate(id, signal?)`** —
+  `GET /compliance/contract-templates/{id}`，返回 `ContractTemplateResp`。**GET 读**。
+- **`client.compliance.listContractTemplates(req?, signal?)`** —
+  `GET /compliance/contract-templates/page`，返回
+  `PageResult<ContractTemplatePageItem>`。**GET 读**——继承 `PageRequest`，过滤
+  支持 `status` / `createTimeStart` / `createTimeEnd`。列表项不下发 `fields`。
+- **`client.compliance.uploadContractTemplatePdf(id, req, options?)`** —
+  `POST /compliance/contract-templates/{id}/pdf`，请求体 `{ pdfBase64 }`，返回
+  `ContractTemplateResp`（含 `pdfHash` / `pdfPageCount`）。**写方法**：SDK 不
+  在客户端做 PDF 解析 / 几何校验。
+- **`client.compliance.publishContractTemplate(id, options?)`** —
+  `POST /compliance/contract-templates/{id}/publish`，DRAFT → PUBLISHED，返回
+  `ContractTemplateResp`。**写方法**：publish 后 `currentVersion` 递增、`fields`
+  与 `pdfHash` 同步固化进版本表。
+- **`client.compliance.archiveContractTemplate(id, options?)`** —
+  `POST /compliance/contract-templates/{id}/archive`，PUBLISHED → ARCHIVED，返回
+  `ContractTemplateResp`。**写方法**：归档后只读，不允许 publish / 编辑 / 删除。
+- **`client.compliance.listContractTemplateVersions(id, signal?)`** —
+  `GET /compliance/contract-templates/{id}/versions`，返回
+  `ContractTemplateVersion[]`（普通数组，非 `PageResult`）。**GET 读**——每次
+  publish 落一个不可变快照。
+- **新增 compliance `template` 子域类型**（`src/compliance/template/types.ts`）：
+  `ContractTemplateField` / `ContractTemplateFieldType` / `ContractTemplateResp`
+  / `ContractTemplatePageItem` / `ContractTemplateStatus` /
+  `ContractTemplateVersion` / `CreateContractTemplateRequest` /
+  `UpdateContractTemplateRequest` / `UploadContractTemplatePdfRequest` /
+  `ListContractTemplatesRequest`。经 `compliance/index.ts` barrel 对外导出。
+- **新增 2 个 scope 常量**：`ScopeComplianceContractTemplateRead`
+  (`compliance:contract_template:read`) /
+  `ScopeComplianceContractTemplateWrite` (`compliance:contract_template:write`)。
+  同步加入 `ComplianceScope` 类型联合与 `complianceScopes()` 返回顺序——总数
+  13 → 15。读方法要求 `:read`、写方法要求 `:write`；不要求 step-up。
+
+> Method Status：9 个方法均为 `production-ready`（compliance gateway S5 / G5
+> 契约、端点、DTO、SDK 测试、文档全部闭环）。无 `gated` 方法。
+
+---
+
 ## [1.9.0] — 2026-05-22
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账

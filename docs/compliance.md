@@ -90,6 +90,17 @@ Report scopes are split by action:
   again) so the new scope is granted.
 - `ScopeComplianceReportsPublish` — `publishReport` (also requires step-up).
 
+Contract-template scopes (added in v1.10.0) are split by direction and do not
+require step-up:
+
+- `ScopeComplianceContractTemplateRead` — `getContractTemplate`,
+  `listContractTemplates`, `listContractTemplateVersions`.
+- `ScopeComplianceContractTemplateWrite` — `createContractTemplate`,
+  `updateContractTemplate`, `deleteContractTemplate`,
+  `uploadContractTemplatePdf`, `publishContractTemplate`,
+  `archiveContractTemplate`. Tokens issued before v1.10.0 do **not** carry these
+  scopes; existing users must re-authorize so the new scopes are granted.
+
 ## Base URL
 
 `Client` keeps the existing model gateway path under `/api/v4`. Compliance uses
@@ -488,6 +499,116 @@ Envelope completion actions beyond this S4 subset — send, remind, authorize,
 download, and token — are deferred backend-side and are not exposed as SDK
 methods in this release.
 
+## Contract Templates
+
+Since v1.10.0 the SDK exposes the compliance gateway S5 contract-template
+surface: a `DRAFT` → `PUBLISHED` → `ARCHIVED` lifecycle with PDF upload, field
+overlay, and immutable version snapshots.
+
+```ts
+client.compliance.createContractTemplate(req, options?):                Promise<ContractTemplateResp>;
+client.compliance.updateContractTemplate(id, req, options?):            Promise<ContractTemplateResp>;
+client.compliance.deleteContractTemplate(id, options?):                 Promise<void>;
+client.compliance.getContractTemplate(id, signal?):                     Promise<ContractTemplateResp>;
+client.compliance.listContractTemplates(req?, signal?):                 Promise<PageResult<ContractTemplatePageItem>>;
+client.compliance.uploadContractTemplatePdf(id, req, options?):         Promise<ContractTemplateResp>;
+client.compliance.publishContractTemplate(id, options?):                Promise<ContractTemplateResp>;
+client.compliance.archiveContractTemplate(id, options?):                Promise<ContractTemplateResp>;
+client.compliance.listContractTemplateVersions(id, signal?):            Promise<ContractTemplateVersion[]>;
+```
+
+Lifecycle:
+
+```ts
+// 1) Create in DRAFT.
+const tpl = await client.compliance.createContractTemplate(
+  { name: 'Mutual NDA', description: 'standard NDA' },
+  { idempotencyKey: createKey },
+);
+
+// 2) Upload PDF body (base64-encoded). pdfHash / pdfPageCount come back on the
+// returned ContractTemplateResp.
+const withPdf = await client.compliance.uploadContractTemplatePdf(
+  tpl.id,
+  { pdfBase64: readPdfBase64() },
+  { idempotencyKey: uploadKey },
+);
+
+// 3) Edit the field overlay (signatures / seals / text / date / check). Only
+// allowed while the template is still DRAFT.
+await client.compliance.updateContractTemplate(
+  tpl.id,
+  {
+    fields: [
+      {
+        key: 'sig-partyA',
+        type: 'signature',
+        label: 'Party A signature',
+        page: 1,
+        x: 100,
+        y: 200,
+        width: 80,
+        height: 30,
+        assignedRole: 'partyA',
+        order: 0,
+        required: true,
+      },
+    ],
+  },
+  { idempotencyKey: updateKey },
+);
+
+// 4) Publish — DRAFT → PUBLISHED. currentVersion increments and the fields +
+// pdfHash are frozen into the version table.
+const published = await client.compliance.publishContractTemplate(tpl.id, {
+  idempotencyKey: publishKey,
+});
+
+// 5) Optionally archive a published template — PUBLISHED → ARCHIVED. Archived
+// templates are read-only.
+await client.compliance.archiveContractTemplate(tpl.id, {
+  idempotencyKey: archiveKey,
+});
+```
+
+`createContractTemplate`, `updateContractTemplate`, `deleteContractTemplate`,
+`uploadContractTemplatePdf`, `publishContractTemplate`, and
+`archiveContractTemplate` are **writes**. They follow the compliance write
+rules — they accept the `Idempotency-Key` header, do not auto-retry on 5xx /
+timeouts, and do not refresh/replay on `401`. Persist the idempotency key on
+the caller side and reuse it when resuming the same action (especially
+`uploadContractTemplatePdf`, which costs bandwidth to retry).
+
+`updateContractTemplate` and `deleteContractTemplate` are **DRAFT-only**. The
+backend refuses both on `PUBLISHED` / `ARCHIVED` templates — for a published
+template, switch to `archiveContractTemplate` instead of deleting it.
+
+`uploadContractTemplatePdf` takes `{ pdfBase64 }` in the request body. The SDK
+does not parse the PDF, validate geometry, or compute the hash on the
+client — those happen on the backend. `pdfHash` and `pdfPageCount` come back on
+the returned `ContractTemplateResp`.
+
+`getContractTemplate`, `listContractTemplates`, and
+`listContractTemplateVersions` are authenticated GET reads — they follow the
+same read semantics as `getReport` / `getCapabilities`: one safe `401`
+refresh-and-replay retry.
+
+`listContractTemplates` returns a `PageResult<ContractTemplatePageItem>`. The
+list-item view deliberately omits `fields` to avoid large-object N+1 on the
+list endpoint — the field overlay is only present on the detail
+(`ContractTemplateResp`) and on each version snapshot
+(`ContractTemplateVersion`).
+
+`listContractTemplateVersions` returns a plain array (not a `PageResult`).
+Every `publishContractTemplate` call appends one immutable
+`ContractTemplateVersion` — capturing the template's `name`, `pdfHash`,
+`fields`, and `statusAtSnapshot` at publish time — and is the offline-review
+ground truth for the version.
+
+The 9 methods do **not** require step-up. They require the new
+`ScopeComplianceContractTemplateRead` (reads) or
+`ScopeComplianceContractTemplateWrite` (writes) scope.
+
 ## Error Classification
 
 Compliance business errors are returned as numeric Java error codes in the
@@ -528,7 +649,7 @@ for them.
 
 | Status | Methods | Meaning |
 | --- | --- | --- |
-| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `listEnvelopeContracts`, `listEnvelopeProviderRequests`, `voidEnvelope`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `listEnvelopeContracts`, `listEnvelopeProviderRequests`, `voidEnvelope`, `createContractTemplate`, `updateContractTemplate`, `deleteContractTemplate`, `getContractTemplate`, `listContractTemplates`, `uploadContractTemplatePdf`, `publishContractTemplate`, `archiveContractTemplate`, `listContractTemplateVersions`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
 | `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
 | `draft contract` | binary download helpers | Type drafts only — not exposed as callable capability in this release. |
 | `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
@@ -555,6 +676,17 @@ DTO, SDK tests, and docs are closed. The two `list*` methods are read-only GET
 projections; `voidEnvelope` is a write that accepts `Idempotency-Key`, does not
 auto-retry, and does not refresh/replay on `401`. Send / remind / authorize /
 download / token actions are deferred backend-side and have no SDK method.
+
+The 9 contract-template methods — `createContractTemplate`,
+`updateContractTemplate`, `deleteContractTemplate`, `getContractTemplate`,
+`listContractTemplates`, `uploadContractTemplatePdf`,
+`publishContractTemplate`, `archiveContractTemplate`,
+`listContractTemplateVersions` — are `production-ready` against the compliance
+gateway S5 (`G5`) contract: endpoint, DTO, SDK tests, and docs are closed. Reads
+are GET (one safe `401` refresh-and-replay); writes accept `Idempotency-Key`,
+do not auto-retry, and do not refresh/replay on `401`. None of them require
+step-up. `updateContractTemplate` and `deleteContractTemplate` are
+DRAFT-only — the backend refuses both on `PUBLISHED` / `ARCHIVED` templates.
 
 ## Safety Boundary
 

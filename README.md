@@ -196,6 +196,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Compliance — 能力与操作投影** | `compliance.getCapabilities`, `compliance.getFeatureGate`, `compliance.listOperations`, `compliance.getOperation` |
 | **Compliance — TSA 只读视图** | `compliance.listTsaProviders`, `compliance.getTsaStats` |
 | **Compliance — envelope 收尾** | `compliance.listEnvelopeContracts`, `compliance.listEnvelopeProviderRequests`, `compliance.voidEnvelope`（`void` 为写、带 `Idempotency-Key`） |
+| **Compliance — 合同模板** | `compliance.createContractTemplate`, `compliance.updateContractTemplate`, `compliance.deleteContractTemplate`, `compliance.getContractTemplate`, `compliance.listContractTemplates`, `compliance.uploadContractTemplatePdf`, `compliance.publishContractTemplate`, `compliance.archiveContractTemplate`, `compliance.listContractTemplateVersions`（写均带 `Idempotency-Key`） |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
 
@@ -483,6 +484,16 @@ client.compliance.getOperation(id, signal?)                // 操作投影详情
 
 client.compliance.listTsaProviders(signal?)                // TSA provider 只读列表
 client.compliance.getTsaStats(signal?)                     // 时间章统计只读视图
+
+client.compliance.createContractTemplate(req, options?)              // 创建合同模板（DRAFT）
+client.compliance.updateContractTemplate(id, req, options?)          // 更新模板（仅 DRAFT）
+client.compliance.deleteContractTemplate(id, options?)               // 删除模板（仅 DRAFT）
+client.compliance.getContractTemplate(id, signal?)                   // 模板详情
+client.compliance.listContractTemplates(req?, signal?)               // 模板分页 → PageResult
+client.compliance.uploadContractTemplatePdf(id, req, options?)       // 上传 PDF（base64）
+client.compliance.publishContractTemplate(id, options?)              // DRAFT → PUBLISHED
+client.compliance.archiveContractTemplate(id, options?)              // PUBLISHED → ARCHIVED
+client.compliance.listContractTemplateVersions(id, signal?)          // 版本快照列表（数组）
 ```
 
 > 6 个 `list*` 分页方法（compliance gateway S1）均走 `GET .../page`，返回
@@ -502,6 +513,17 @@ client.compliance.getTsaStats(signal?)                     // 时间章统计只
 > `voidEnvelope` 为写方法——走 compliance 写路径（`Idempotency-Key`、不重试、
 > `401` 不重放），`reason` 随 JSON body 提交。envelope 的 send / remind /
 > authorize / download / token 等动作在后端 S4 范围之外暂缓。
+
+> compliance gateway S5 新增合同模板（contract template）9 个方法：DRAFT →
+> PUBLISHED → ARCHIVED 全生命周期。读方法（`getContractTemplate` /
+> `listContractTemplates` / `listContractTemplateVersions`）走 GET 读路径；写
+> 方法（`createContractTemplate` / `updateContractTemplate` /
+> `deleteContractTemplate` / `uploadContractTemplatePdf` /
+> `publishContractTemplate` / `archiveContractTemplate`）走 compliance 写路径
+> （`Idempotency-Key`、不重试、`401` 不重放）。新增 2 个 scope —
+> `compliance:contract_template:read` / `compliance:contract_template:write` —
+> 不要求 step-up。版本列表与列表项视图都不下发模板【字段叠加】，字段只在详情 /
+> 版本快照里返回。
 
 ### 示例
 
