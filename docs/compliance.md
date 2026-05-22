@@ -252,6 +252,16 @@ switch (info.key) {
 `CompliancePollError` is used by polling helpers for terminal failure, timeout,
 abort, and unknown states.
 
+Since v1.5.0, `complianceErrorToRetryAdvice(info)` projects a `ComplianceErrorInfo`
+into the cross-domain `RetryAdvice` model (`retryable` / `retryAfter` /
+`sameIdempotencyKeyRequired` / `manualActionRequired` / `reason` / messages /
+`supportCode`). It is an additive, read-only projection — it does not modify or
+replace `ComplianceErrorInfo`; `classifyComplianceError` is unchanged. The
+`reason` field is a normalized mapping of the existing error-code registries, not
+a new code set. Terminal errors advise a fresh idempotency key
+(`sameIdempotencyKeyRequired: false`); step-up errors advise re-authenticating
+and retrying with the same key.
+
 ## Method Status
 
 Each `client.compliance.*` method has one of four maturity grades. Treat this
