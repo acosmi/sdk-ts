@@ -4,8 +4,8 @@
 // + 数值错误码 → symbolic key 的分类器；不暴露下游材料、provider ledger /
 // distribution billing 内部 API。
 //
-// 子域 (evidence / timestamp / report / signing / seal-approval / provider) 无自身
-// index.ts，barrel 直接 re-export 其 types.ts。
+// 子域 (evidence / timestamp / report / signing / seal-approval / provider /
+// operation) 无自身 index.ts，barrel 直接 re-export 其 types.ts。
 //
 // compliance/client.ts 导出 ComplianceClient 类，并 declaration-merge 一个 compliance
 // getter 到 Client.prototype — `export { ComplianceClient, ... }` 已加载该模块，
@@ -23,6 +23,7 @@ export * from './report/types';
 export * from './signing/types';
 export * from './seal-approval/types';
 export * from './provider/types';
+export * from './operation/types';
 
 // === 错误码分类器 ===
 export {

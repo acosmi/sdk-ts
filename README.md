@@ -193,6 +193,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Web Search** | `newWebSearchTool` (factory)                                                       |
 | **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
 | **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`（均返回 `PageResult<T>`） |
+| **Compliance — 能力与操作投影** | `compliance.getCapabilities`, `compliance.getFeatureGate`, `compliance.listOperations`, `compliance.getOperation` |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
 
@@ -469,6 +470,11 @@ client.compliance.listSealApprovals(req?, signal?)         // 分页 → PageRes
 
 client.compliance.getProviderRequest(id, signal?)
 client.compliance.waitForProviderRequestTerminal(id, opts?)
+
+client.compliance.getCapabilities(signal?)                 // 能力闸门列表
+client.compliance.getFeatureGate(action, signal?)          // 单动作能力（便捷，一次网络请求）
+client.compliance.listOperations(req?, signal?)            // 操作投影分页 → PageResult
+client.compliance.getOperation(id, signal?)                // 操作投影详情
 ```
 
 > 6 个 `list*` 分页方法（compliance gateway S1）均走 `GET .../page`，返回
@@ -476,6 +482,11 @@ client.compliance.waitForProviderRequestTerminal(id, opts?)
 > （`pageNo` / `pageSize` / `sortBy` / `sortDirection`，全部可选）+ 各自的过滤项。
 > `createTimeStart` / `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss` 字符串提供，
 > SDK 原样透传、不做格式校验。
+
+> compliance gateway S2 新增能力闸门查询（`getCapabilities` / `getFeatureGate`）
+> 与操作投影读（`listOperations` / `getOperation`）。`getCapabilities` 为每个高
+> 风险 / 收费动作返回 `executable` / `state` / `requiredScopes` / `requiredStepUp`
+> ——拿不到能力时必须 fail-closed。均走 GET 读路径（`401` 单次刷新重放）。
 
 ### 示例
 

@@ -72,6 +72,12 @@ import type {
   ComplianceProviderRequestStatus,
   ProviderRequestStatusView,
 } from './provider/types';
+import type {
+  ComplianceCapability,
+  ListOperationsRequest,
+  OperationDetail,
+  OperationPageItem,
+} from './operation/types';
 import {
   classifyComplianceError,
   isComplianceBusinessError,
@@ -648,6 +654,87 @@ export class ComplianceClient {
       () => this.getProviderRequest(id, opts.signal),
       (v) => classifyProviderStatus(v.status as ComplianceProviderRequestStatus),
       opts,
+    );
+  }
+
+  // =========================================================================
+  // Capabilities (read-only — compliance gateway S2 / gap-register U-6)
+  // =========================================================================
+
+  /**
+   * 读 — compliance 能力闸门列表（compliance gateway S2）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。后端 G2 为每个高风险 / 收费动作
+   * （`signEnvelope` / `createH5SigningUrl` / `publishReport` /
+   * `approveSealApproval` / `executeSealUse` / `createSeal`）返回一条
+   * {@link ComplianceCapability}：是否可执行、所处状态、所需 scope / step-up。
+   *
+   * 调用方在高风险动作执行【前】查询本结果做门控；拿不到能力时必须 fail-closed
+   *（按 `executable=false` 处理）。
+   */
+  getCapabilities(signal?: AbortSignal): Promise<ComplianceCapability[]> {
+    return this.read<ComplianceCapability[]>(
+      'GET',
+      '/compliance/capabilities',
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — 单个动作的能力闸门视图（便捷方法）。
+   *
+   * 拉取完整 {@link getCapabilities} 列表并返回 `action` 匹配的那一条，无匹配时
+   * 返回 `undefined`。**每次调用产生一次网络请求**——需要门控多个动作时应改用
+   * {@link getCapabilities} 一次性取回再本地查表，避免重复请求。
+   *
+   * 与 {@link getCapabilities} 一致走 GET 读路径（允许 401 单次刷新重放）。
+   */
+  async getFeatureGate(
+    action: string,
+    signal?: AbortSignal,
+  ): Promise<ComplianceCapability | undefined> {
+    const caps = await this.getCapabilities(signal);
+    return caps.find((c) => c.action === action);
+  }
+
+  // =========================================================================
+  // Operation projection (read-only — compliance gateway S2 / gap-register U-5)
+  // =========================================================================
+
+  /**
+   * 读 — compliance 操作投影分页列表（compliance gateway S2）。
+   *
+   * 走 GET 读路径。返回 yudao `PageResult<T>`（`{ total, list }`）。所有过滤项
+   * 可选；`createTimeStart` / `createTimeEnd` 由调用方按 `yyyy-MM-dd HH:mm:ss`
+   * 提供，SDK 原样透传，不做格式校验或时区转换。
+   *
+   * 操作投影描述【一次操作】本身的执行进度，与履约对象的领域状态正交。
+   */
+  listOperations(
+    req: ListOperationsRequest = {},
+    signal?: AbortSignal,
+  ): Promise<PageResult<OperationPageItem>> {
+    return this.read<PageResult<OperationPageItem>>(
+      'GET',
+      `/compliance/operations/page${pageQuery(req, ['status', 'createTimeStart', 'createTimeEnd'])}`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — compliance 操作投影详情（compliance gateway S2）。
+   *
+   * `id` 为数值行主键（非 `operationId` 幂等键）。走 GET 读路径（允许 401 单次
+   * 刷新重放）。
+   */
+  getOperation(id: number, signal?: AbortSignal): Promise<OperationDetail> {
+    return this.read<OperationDetail>(
+      'GET',
+      `/compliance/operations/${encodeURIComponent(id)}`,
+      null,
+      signal,
     );
   }
 
