@@ -42,6 +42,8 @@ import type {
   TimestampPageItem,
   TimestampToken,
   TimestampVerifyResult,
+  TsaProvider,
+  TsaStats,
   VerifyTimestampRequest,
 } from './timestamp/types';
 import type {
@@ -296,6 +298,41 @@ export class ComplianceClient {
       () => this.getTimestamp(id, opts.signal),
       (t) => classifyTimestamp(t.verificationStatus as ComplianceTimestampVerificationStatus),
       opts,
+    );
+  }
+
+  // =========================================================================
+  // TSA readonly views (read-only — compliance gateway S3 / gap-register U-7)
+  // =========================================================================
+
+  /**
+   * 读 — 时间章授权机构（TSA）provider 列表（compliance gateway S3）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。后端 G3 为每个 TSA provider 返回
+   * 一条 {@link TsaProvider}：名称、所处环境、当前是否可用。只读视图，不含
+   * provider 端点 / 凭证 / 证书等内部接入材料。
+   */
+  listTsaProviders(signal?: AbortSignal): Promise<TsaProvider[]> {
+    return this.read<TsaProvider[]>(
+      'GET',
+      '/compliance/timestamps/providers',
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — 时间章统计视图（compliance gateway S3）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。返回 {@link TsaStats}：时间章总数
+   * + 按校验状态分桶的计数。只读聚合视图。
+   */
+  getTsaStats(signal?: AbortSignal): Promise<TsaStats> {
+    return this.read<TsaStats>(
+      'GET',
+      '/compliance/timestamps/stats',
+      null,
+      signal,
     );
   }
 

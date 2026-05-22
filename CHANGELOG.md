@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-7 TSA
+> readonly views — compliance gateway S3**：在 `client.compliance.*` 上新增两个
+> 时间章授权机构（TSA）只读视图方法，对接已合并的后端 **G3** 契约。**纯增量、
+> 向后兼容**——不改任何既有导出符号的签名或行为；8 个占位命名空间维持
+> `export {}`；`typecheck` / `lint` / `vitest` / `build` / `test:pack` / `docs`
+> 全绿。
+
+### Added
+
+- **`client.compliance.listTsaProviders(signal?)`**（compliance gateway S3 /
+  缺口总账 U-7）——`GET /compliance/timestamps/providers`，返回
+  `TsaProvider[]`。后端 G3 为每个 TSA provider 返回一条 provider 视图：
+  `name` / `environment` / `available`。只读视图，不含 provider 端点 / 凭证 /
+  证书等内部接入材料。
+- **`client.compliance.getTsaStats(signal?)`**（compliance gateway S3 / 缺口
+  总账 U-7）——`GET /compliance/timestamps/stats`，返回 `TsaStats`：时间章总数
+  `total` + 按校验状态分桶的计数 `byVerificationStatus`（`Record<string,
+  number>`，键为校验状态枚举名，值为计数）。
+- **新增 compliance `timestamp` 子域类型**（`src/compliance/timestamp/types.ts`）：
+  `TsaProvider`（镜像后端 `TsaProviderVO`）/ `TsaStats`（镜像后端
+  `TsaStatsVO`）。经 `compliance/index.ts` barrel 对外导出。
+- **GET 读语义**：2 个新方法均走既有 compliance GET 读路径——`401` 单次安全
+  刷新重放、不禁用。
+
+---
+
 ## [1.7.0] — 2026-05-22
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账

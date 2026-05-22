@@ -383,6 +383,48 @@ provider raw payloads, certificates, storage keys, or contract originals.
 `createTimeStart` / `createTimeEnd` are caller-supplied datetime strings parsed
 by the backend as `yyyy-MM-dd HH:mm:ss`; the SDK passes them through verbatim.
 
+## TSA Readonly Views
+
+Since v1.8.0 the SDK exposes the compliance gateway S3 reads: two timestamp
+authority (TSA) readonly views.
+
+```ts
+client.compliance.listTsaProviders(signal?):  Promise<TsaProvider[]>;
+client.compliance.getTsaStats(signal?):       Promise<TsaStats>;
+```
+
+Both are authenticated GET reads — they follow the same read semantics as
+`getReport` / `getCapabilities`: one safe `401` refresh-and-replay retry.
+
+`listTsaProviders` (`GET /compliance/timestamps/providers`) returns one
+`TsaProvider` entry per configured TSA provider.
+
+```ts
+const providers = await client.compliance.listTsaProviders();
+for (const p of providers) {
+  console.log(p.name, p.environment, p.available);
+}
+```
+
+`TsaProvider` fields: `name` (string), `environment` (string — for example
+`production` / `sandbox`), `available` (boolean). It is a readonly view — it
+never exposes provider endpoints, credentials, certificates, or other internal
+integration material.
+
+`getTsaStats` (`GET /compliance/timestamps/stats`) returns a readonly
+aggregation: the total timestamp count plus a per-verification-status count map.
+
+```ts
+const stats = await client.compliance.getTsaStats();
+console.log(stats.total);
+console.log(stats.byVerificationStatus.VERIFIED ?? 0);
+```
+
+`TsaStats` fields: `total` (number), `byVerificationStatus`
+(`Record<string, number>` — keys are verification-status enum names such as
+`VERIFIED` / `PENDING` / `FAILED`, values are counts). The map may be empty
+when no timestamps exist.
+
 ## Error Classification
 
 Compliance business errors are returned as numeric Java error codes in the
@@ -423,7 +465,7 @@ for them.
 
 | Status | Methods | Meaning |
 | --- | --- | --- |
-| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
 | `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
 | `draft contract` | binary download helpers | Type drafts only — not exposed as callable capability in this release. |
 | `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
@@ -438,6 +480,11 @@ duplicate. Persist the idempotency key on the caller side.
 DTO, SDK tests, and docs are closed. They are read-only GET projections and do
 not themselves carry step-up or gate state; `getCapabilities` *reports* whether
 the gated actions are currently executable.
+
+`listTsaProviders` and `getTsaStats` are `production-ready` against the
+compliance gateway S3 (`G3`) contract — endpoint, DTO, SDK tests, and docs are
+closed. They are read-only GET projections of timestamp authority state and
+aggregate counts; they carry no step-up or gate state.
 
 ## Safety Boundary
 
