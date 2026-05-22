@@ -56,10 +56,12 @@ import type {
 import type {
   CreateH5SigningUrlRequest,
   CreateSigningEnvelopeRequest,
+  EnvelopeContractItem,
   ListSigningEnvelopesRequest,
   SignEnvelopeRequest,
   SigningEnvelope,
   SigningEnvelopePageItem,
+  VoidEnvelopeRequest,
 } from './signing/types';
 import type {
   ApproveSealApprovalQuery,
@@ -540,6 +542,65 @@ export class ComplianceClient {
       'POST',
       `/compliance/signing-envelopes/${encodeURIComponent(envelopeId)}/sync-provider-status`,
       null,
+      writeCtx(opts),
+    );
+  }
+
+  /**
+   * 读 — envelope 下挂的合同列表（compliance gateway S4）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。后端 G4 为每份挂在该 envelope 上的
+   * 合同返回一条 {@link EnvelopeContractItem}：编号 / 标题 / MIME / 大小 / 哈希
+   * 指纹 / 状态。返回普通数组（非 `PageResult`）。SDK-safe 视图——不含合同原文 /
+   * storage key / provider raw payload。
+   */
+  listEnvelopeContracts(
+    envelopeId: number,
+    signal?: AbortSignal,
+  ): Promise<EnvelopeContractItem[]> {
+    return this.read<EnvelopeContractItem[]>(
+      'GET',
+      `/compliance/signing-envelopes/${encodeURIComponent(envelopeId)}/contracts`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 读 — envelope 关联的 provider 请求列表（compliance gateway S4）。
+   *
+   * 走 GET 读路径（允许 401 单次刷新重放）。后端 G4 复用操作投影
+   * {@link OperationPageItem}：描述每次 provider 请求本身的执行进度，与 envelope
+   * 领域状态正交。返回普通数组（非 `PageResult`）。
+   */
+  listEnvelopeProviderRequests(
+    envelopeId: number,
+    signal?: AbortSignal,
+  ): Promise<OperationPageItem[]> {
+    return this.read<OperationPageItem[]>(
+      'GET',
+      `/compliance/signing-envelopes/${encodeURIComponent(envelopeId)}/provider-requests`,
+      null,
+      signal,
+    );
+  }
+
+  /**
+   * 作废 envelope（写，compliance gateway S4）。
+   *
+   * 走 compliance 写路径——发送前 `ensureToken` 一次、不自动重试、`401` 不刷新
+   * 重放；支持 `Idempotency-Key` header（强烈建议调用方持久化幂等键，重试 / 恢复
+   * 时复用，避免重复作废）。`req.reason` 为必填的作废原因，随 JSON body 提交。
+   */
+  voidEnvelope(
+    envelopeId: number,
+    req: VoidEnvelopeRequest,
+    opts: ComplianceWriteOptions = {},
+  ): Promise<boolean> {
+    return this.write<boolean>(
+      'POST',
+      `/compliance/signing-envelopes/${encodeURIComponent(envelopeId)}/void`,
+      req,
       writeCtx(opts),
     );
   }

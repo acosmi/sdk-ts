@@ -425,6 +425,69 @@ console.log(stats.byVerificationStatus.VERIFIED ?? 0);
 `VERIFIED` / `PENDING` / `FAILED`, values are counts). The map may be empty
 when no timestamps exist.
 
+## Envelope Completion
+
+Since v1.9.0 the SDK exposes the compliance gateway S4 envelope-completion
+surface: two readonly views and one write.
+
+```ts
+client.compliance.listEnvelopeContracts(envelopeId, signal?):         Promise<EnvelopeContractItem[]>;
+client.compliance.listEnvelopeProviderRequests(envelopeId, signal?):  Promise<OperationPageItem[]>;
+client.compliance.voidEnvelope(envelopeId, req, options?):            Promise<boolean>;
+```
+
+`listEnvelopeContracts` (`GET /compliance/signing-envelopes/{id}/contracts`)
+and `listEnvelopeProviderRequests`
+(`GET /compliance/signing-envelopes/{id}/provider-requests`) are authenticated
+GET reads — they follow the same read semantics as `getReport` /
+`getCapabilities`: one safe `401` refresh-and-replay retry. Both return a plain
+array (not a `PageResult`).
+
+```ts
+const contracts = await client.compliance.listEnvelopeContracts(envelopeId);
+for (const c of contracts) {
+  console.log(c.contractNo, c.title, c.status, c.contentHash);
+}
+
+const providerRequests =
+  await client.compliance.listEnvelopeProviderRequests(envelopeId);
+for (const op of providerRequests) {
+  console.log(op.operationId, op.status, op.terminal, op.retryable);
+}
+```
+
+`EnvelopeContractItem` fields: `id` (number), `envelopeId` (number),
+`contractNo` (string), `title` (string), `mimeType` (string), `size` (number),
+`hashAlgorithm` (string), `contentHash` (string), `signedContentHash`
+(string?), `status` (string), `createTime` (string — ISO-8601). It is a
+SDK-safe view — it never exposes contract originals, storage keys, or provider
+raw payloads.
+
+`listEnvelopeProviderRequests` **reuses** the operation-projection type
+`OperationPageItem` (see *Capabilities And Operation Projection*); it describes
+the progress of each provider request, orthogonal to the envelope's domain
+status.
+
+`voidEnvelope` (`POST /compliance/signing-envelopes/{id}/void`) is a **write**.
+It follows the compliance write rules — it accepts the `Idempotency-Key`
+header, does not auto-retry on 5xx / timeouts, and does not refresh/replay on
+`401`. The void reason is required and is sent in the JSON body:
+
+```ts
+const voided = await client.compliance.voidEnvelope(
+  envelopeId,
+  { reason: 'signed in error' },
+  { idempotencyKey: voidKey },
+);
+```
+
+`VoidEnvelopeRequest` is `{ reason: string }`. Persist the idempotency key on
+the caller side and reuse it when resuming the same void action.
+
+Envelope completion actions beyond this S4 subset — send, remind, authorize,
+download, and token — are deferred backend-side and are not exposed as SDK
+methods in this release.
+
 ## Error Classification
 
 Compliance business errors are returned as numeric Java error codes in the
@@ -465,7 +528,7 @@ for them.
 
 | Status | Methods | Meaning |
 | --- | --- | --- |
-| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
+| `production-ready` | `createEvidenceAsset`, `getEvidenceAsset`, `verifyEvidencePublic`, `listEvidenceAssets`, `listEvidencePackages`, `issueTimestamp`, `issueTimestampForAsset`, `getTimestamp`, `verifyTimestamp`, `waitForTimestampVerified`, `listTimestamps`, `listTsaProviders`, `getTsaStats`, `buildEvidencePackage`, `createReport`, `getReport`, `downloadReport`, `listReports`, `createSigningEnvelope`, `getSigningEnvelope`, `syncSigningEnvelopeStatus`, `listSigningEnvelopes`, `listEnvelopeContracts`, `listEnvelopeProviderRequests`, `voidEnvelope`, `submitSealApproval`, `rejectSealApproval`, `cancelSealApproval`, `listPendingSealApprovals`, `getSealApproval`, `listSealApprovals`, `getProviderRequest`, `waitForProviderRequestTerminal`, `getCapabilities`, `getFeatureGate`, `listOperations`, `getOperation`, `classifyError` | Backend endpoint, scope, DTO contract, SDK tests and docs are all closed. Safe to call in production. |
 | `gated` | `publishReport`, `signEnvelope`, `createH5SigningUrl`, `approveSealApproval` | SDK exposes the method, but the backend fails-closed (`COMPLIANCE_STEP_UP_REQUIRED` / `ENVELOPE_GATE_CLOSED`) until step-up and the W3 gate chain are ready. The SDK does not retry and does not fake success — surface the typed error as "feature not yet open". |
 | `draft contract` | binary download helpers | Type drafts only — not exposed as callable capability in this release. |
 | `internal-only` | distribution billing (`reserve` / `commit` / `cancel` / `reconcile` / `refund`), provider raw payloads, provider callbacks, CFCA controlled materials | Server-side S2S only. Never part of the SDK call surface; no SDK method exists for these. |
@@ -485,6 +548,13 @@ the gated actions are currently executable.
 compliance gateway S3 (`G3`) contract — endpoint, DTO, SDK tests, and docs are
 closed. They are read-only GET projections of timestamp authority state and
 aggregate counts; they carry no step-up or gate state.
+
+`listEnvelopeContracts`, `listEnvelopeProviderRequests`, and `voidEnvelope` are
+`production-ready` against the compliance gateway S4 (`G4`) contract — endpoint,
+DTO, SDK tests, and docs are closed. The two `list*` methods are read-only GET
+projections; `voidEnvelope` is a write that accepts `Idempotency-Key`, does not
+auto-retry, and does not refresh/replay on `401`. Send / remind / authorize /
+download / token actions are deferred backend-side and have no SDK method.
 
 ## Safety Boundary
 

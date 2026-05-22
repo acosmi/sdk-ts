@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.0] — 2026-05-22
+
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
+> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-10 /
+> U-12 子集 — compliance gateway S4 签署 envelope 收尾**：在
+> `client.compliance.*` 上新增 3 个 envelope 收尾方法，对接已合并的后端 **G4**
+> 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；8 个占位命名
+> 空间维持 `export {}`；`typecheck` / `lint` / `vitest` / `build` / `test:pack`
+> / `docs` 全绿。
+
+### Added
+
+- **`client.compliance.listEnvelopeContracts(envelopeId, signal?)`**
+  （compliance gateway S4 / 缺口总账 U-10）——`GET
+  /compliance/signing-envelopes/{id}/contracts`，返回
+  `EnvelopeContractItem[]`（普通数组，非 `PageResult`）。后端 G4 为每份挂在该
+  envelope 上的合同返回一条视图：`id` / `envelopeId` / `contractNo` / `title`
+  / `mimeType` / `size` / `hashAlgorithm` / `contentHash` /
+  `signedContentHash?` / `status` / `createTime`。SDK-safe——不含合同原文 /
+  storage key / provider raw payload。
+- **`client.compliance.listEnvelopeProviderRequests(envelopeId, signal?)`**
+  （compliance gateway S4 / 缺口总账 U-10）——`GET
+  /compliance/signing-envelopes/{id}/provider-requests`，返回
+  `OperationPageItem[]`（普通数组，非 `PageResult`）。**复用**操作投影类型
+  `OperationPageItem`（不另造同名类型），描述每次 provider 请求本身的执行进度。
+- **`client.compliance.voidEnvelope(envelopeId, req, options?)`**（compliance
+  gateway S4 / 缺口总账 U-12）——`POST /compliance/signing-envelopes/{id}/void`，
+  作废一个签署 envelope，返回 `boolean`。**写方法**：走 compliance 写路径——
+  发送前 `ensureToken` 一次、不自动重试、`401` 不刷新重放；支持
+  `Idempotency-Key` header。`VoidEnvelopeRequest = { reason: string }`，作废原因
+  随 JSON body 提交。
+- **新增 compliance `signing` 子域类型**（`src/compliance/signing/types.ts`）：
+  `EnvelopeContractItem`（镜像后端 `EnvelopeContractItem`）/
+  `VoidEnvelopeRequest`。经 `compliance/index.ts` barrel 对外导出。
+- **GET 读 / 写路径区分**：2 个 `list*` 方法走既有 compliance GET 读路径
+  （`401` 单次安全刷新重放）；`voidEnvelope` 走 compliance 写路径
+  （`Idempotency-Key`、不重试、`401` 不重放）。
+
+> envelope 收尾的 send / remind / authorize / download / token 等动作在后端
+> S4 范围之外暂缓——本版本不暴露对应 SDK 方法。
+
+---
+
 ## [1.8.0] — 2026-05-22
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账

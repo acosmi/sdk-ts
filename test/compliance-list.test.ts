@@ -8,8 +8,10 @@ import { describe, expect, it } from 'vitest';
 
 import { Client } from '../src/index';
 import type {
+  EnvelopeContractItem,
   EvidenceAssetPageItem,
   EvidencePackagePageItem,
+  OperationPageItem,
   ReportPageItem,
   SealApprovalPageItem,
   SigningEnvelopePageItem,
@@ -246,6 +248,80 @@ describe('ComplianceClient — listSigningEnvelopes', () => {
     expect(calls[0].url).toContain('/compliance/signing-envelopes/page');
     expect(queryOf(calls[0].url).get('pageSize')).toBe('20');
     expect(page.list[0].envelopeNo).toBe('ENV-11');
+  });
+});
+
+describe('ComplianceClient — listEnvelopeContracts (S4)', () => {
+  it('GETs /compliance/signing-envelopes/{id}/contracts and unwraps a plain array', async () => {
+    const item: EnvelopeContractItem = {
+      id: 21,
+      envelopeId: 11,
+      contractNo: 'CT-21',
+      title: 'NDA',
+      mimeType: 'application/pdf',
+      size: 4096,
+      hashAlgorithm: 'sha256',
+      contentHash: 'h-content',
+      signedContentHash: 'h-signed',
+      status: 'SIGNED',
+      createTime: '2026-05-20T00:00:00',
+    };
+    const { fetch, calls } = captureFetch(() =>
+      jsonResponse({ code: 0, data: [item] }),
+    );
+    const client = clientWith(fetch);
+    const contracts = await client.compliance.listEnvelopeContracts(11);
+    expect(calls[0].url).toContain('/admin-api/compliance/signing-envelopes/11/contracts');
+    expect(calls[0].url).not.toContain('/api/v4');
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer token-1' });
+    expect(Array.isArray(contracts)).toBe(true);
+    expect(contracts).toHaveLength(1);
+    expect(contracts[0].contractNo).toBe('CT-21');
+    expect(contracts[0].signedContentHash).toBe('h-signed');
+    expect(contracts[0].createTime).toBe('2026-05-20T00:00:00');
+  });
+
+  it('GET retries once on 401 (token refresh path)', async () => {
+    let firstSeen = false;
+    const { fetch, calls } = captureFetch(() => {
+      if (!firstSeen) {
+        firstSeen = true;
+        return emptyResponse(401);
+      }
+      return jsonResponse({ code: 0, data: [] });
+    });
+    const client = clientWith(fetch);
+    client.forceRefresh = async () => {
+      client.tokens = { ...client.tokens!, access_token: 'token-2' };
+    };
+    const contracts = await client.compliance.listEnvelopeContracts(11);
+    expect(contracts).toHaveLength(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].init.headers).toMatchObject({ Authorization: 'Bearer token-2' });
+  });
+});
+
+describe('ComplianceClient — listEnvelopeProviderRequests (S4)', () => {
+  it('GETs /compliance/signing-envelopes/{id}/provider-requests and reuses OperationPageItem', async () => {
+    const item: OperationPageItem = {
+      id: 31,
+      operationId: 'op-31',
+      status: 'SUCCESS',
+      terminal: true,
+      retryable: false,
+      attemptCount: 1,
+      createTime: '2026-05-21T00:00:00',
+    };
+    const { fetch, calls } = captureFetch(() =>
+      jsonResponse({ code: 0, data: [item] }),
+    );
+    const client = clientWith(fetch);
+    const ops = await client.compliance.listEnvelopeProviderRequests(11);
+    expect(calls[0].url).toContain('/compliance/signing-envelopes/11/provider-requests');
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer token-1' });
+    expect(Array.isArray(ops)).toBe(true);
+    expect(ops[0].operationId).toBe('op-31');
+    expect(ops[0].terminal).toBe(true);
   });
 });
 
