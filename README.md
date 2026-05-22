@@ -195,6 +195,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`（均返回 `PageResult<T>`） |
 | **Compliance — 能力与操作投影** | `compliance.getCapabilities`, `compliance.getFeatureGate`, `compliance.listOperations`, `compliance.getOperation` |
 | **Compliance — TSA 只读视图** | `compliance.listTsaProviders`, `compliance.getTsaStats` |
+| **Compliance — envelope 收尾** | `compliance.listEnvelopeContracts`, `compliance.listEnvelopeProviderRequests`, `compliance.voidEnvelope`（`void` 为写、带 `Idempotency-Key`） |
 
 完整签名见 `dist/node/index.d.ts`，IDE 自带补全。
 
@@ -460,6 +461,9 @@ client.compliance.signEnvelope(envelopeId, req, options?)            // step-up 
 client.compliance.createH5SigningUrl(envelopeId, req, options?)      // step-up + gate
 client.compliance.syncSigningEnvelopeStatus(envelopeId, options?)
 client.compliance.listSigningEnvelopes(req?, signal?)      // 分页 → PageResult
+client.compliance.listEnvelopeContracts(envelopeId, signal?)         // 合同列表（数组）
+client.compliance.listEnvelopeProviderRequests(envelopeId, signal?)  // provider 请求列表（数组）
+client.compliance.voidEnvelope(envelopeId, req, options?)            // 作废 envelope（写）
 
 client.compliance.submitSealApproval(req, options?)
 client.compliance.approveSealApproval(id, query, options?) // step-up
@@ -491,6 +495,13 @@ client.compliance.getTsaStats(signal?)                     // 时间章统计只
 > 与操作投影读（`listOperations` / `getOperation`）。`getCapabilities` 为每个高
 > 风险 / 收费动作返回 `executable` / `state` / `requiredScopes` / `requiredStepUp`
 > ——拿不到能力时必须 fail-closed。均走 GET 读路径（`401` 单次刷新重放）。
+
+> compliance gateway S4 新增 envelope 收尾方法：`listEnvelopeContracts` /
+> `listEnvelopeProviderRequests` 走 GET 读路径返回普通数组（非 `PageResult`），
+> `listEnvelopeProviderRequests` 复用操作投影类型 `OperationPageItem`；
+> `voidEnvelope` 为写方法——走 compliance 写路径（`Idempotency-Key`、不重试、
+> `401` 不重放），`reason` 随 JSON body 提交。envelope 的 send / remind /
+> authorize / download / token 等动作在后端 S4 范围之外暂缓。
 
 ### 示例
 

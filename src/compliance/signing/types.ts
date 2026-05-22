@@ -95,3 +95,47 @@ export interface ListSigningEnvelopesRequest extends PageRequest {
   /** 创建时间上界，`yyyy-MM-dd HH:mm:ss`。 */
   createTimeEnd?: string;
 }
+
+// =============================================================================
+// Envelope Completion (compliance gateway S4 — gap-register U-10 / U-12)
+// =============================================================================
+
+/**
+ * 签署 envelope 下挂的合同【列表项】视图。对应后端 G4 `EnvelopeContractItem`。
+ *
+ * 一个 envelope 可挂多份合同；本视图描述合同的元数据与哈希指纹，便于离线复核。
+ * SDK-safe 子集——不含合同原文 / storage key / provider raw payload。时间字段
+ * 为 ISO-8601 字符串。
+ */
+export interface EnvelopeContractItem {
+  /** 合同行 id（数值主键）。 */
+  id: number;
+  /** 所属 envelope id。 */
+  envelopeId: number;
+  /** 合同编号。 */
+  contractNo: string;
+  /** 合同标题。 */
+  title: string;
+  /** 合同文件 MIME 类型。 */
+  mimeType: string;
+  /** 合同文件字节数。 */
+  size: number;
+  /** 哈希算法（如 `sha256`）。 */
+  hashAlgorithm: string;
+  /** 合同原文内容哈希。 */
+  contentHash: string;
+  /** 签署后内容哈希（未签署时缺省）。 */
+  signedContentHash?: string;
+  /** 合同状态。 */
+  status: string;
+  /** 创建时间 ISO-8601。 */
+  createTime: string;
+}
+
+/**
+ * `voidEnvelope` 请求体。作废一个签署 envelope，`reason` 为必填的作废原因。
+ */
+export interface VoidEnvelopeRequest {
+  /** 作废原因（必填，随 JSON body 提交）。 */
+  reason: string;
+}

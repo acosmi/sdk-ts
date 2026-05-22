@@ -353,6 +353,67 @@ describe('ComplianceClient — write (POST)', () => {
     const body = JSON.parse(String(calls[0].init.body));
     expect(body).not.toHaveProperty('provider');
   });
+
+  it('voidEnvelope POSTs reason body + Idempotency-Key and unwraps boolean (S4)', async () => {
+    const { fetch, calls } = captureFetch(() =>
+      jsonResponse({ code: 0, data: true }),
+    );
+    const client = clientWith(fetch);
+    const ok = await client.compliance.voidEnvelope(
+      77,
+      { reason: 'signed in error' },
+      { idempotencyKey: 'void-key-1' },
+    );
+    expect(ok).toBe(true);
+    expect(calls[0].url).toContain('/compliance/signing-envelopes/77/void');
+    expect((calls[0].init.method ?? 'GET').toUpperCase()).toBe('POST');
+    expect(calls[0].init.headers).toMatchObject({
+      'Idempotency-Key': 'void-key-1',
+      'Content-Type': 'application/json',
+    });
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body).toEqual({ reason: 'signed in error' });
+  });
+
+  it('voidEnvelope omits Idempotency-Key header when not provided (S4)', async () => {
+    const { fetch, calls } = captureFetch(() => jsonResponse({ code: 0, data: true }));
+    const client = clientWith(fetch);
+    await client.compliance.voidEnvelope(77, { reason: 'duplicate' });
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('voidEnvelope does NOT auto-retry / replay on 401 (S4 write safety)', async () => {
+    let count = 0;
+    const { fetch, calls } = captureFetch(() => {
+      count++;
+      return emptyResponse(401);
+    });
+    const client = clientWith(fetch);
+    let refreshCount = 0;
+    client.forceRefresh = async () => {
+      refreshCount++;
+    };
+    await expect(
+      client.compliance.voidEnvelope(77, { reason: 'x' }),
+    ).rejects.toThrow();
+    expect(count).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(refreshCount).toBe(0);
+  });
+
+  it('voidEnvelope does NOT auto-retry on 5xx (S4 write safety)', async () => {
+    let count = 0;
+    const { fetch } = captureFetch(() => {
+      count++;
+      return emptyResponse(503);
+    });
+    const client = clientWith(fetch);
+    await expect(
+      client.compliance.voidEnvelope(77, { reason: 'x' }),
+    ).rejects.toThrow();
+    expect(count).toBe(1);
+  });
 });
 
 describe('ComplianceClient — error classification', () => {
