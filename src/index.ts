@@ -1,6 +1,9 @@
 // index.ts — Acosmi SDK TypeScript 主入口
 //
-// 端口源: acosmi-sdk-go v0.19.0 (一字不差对齐)
+// 自 2026-05-22 起 TS SDK 是主实现 / 事实标准；Go SDK (acosmi-sdk-go) 暂停维护，
+// 待 TS 稳定后再从 TS 反向翻译补齐 Go (方向 TS→Go)。
+// 跨语言契约印记 (snake_case wire-format / 符号名对齐 / bug-for-bug 行为) 见
+// docs/开发与发布手册.md §5。
 //
 // 双格式红线: AnthropicAdapter + OpenAIAdapter 等地位 (对应两个不同下游产品)。
 //

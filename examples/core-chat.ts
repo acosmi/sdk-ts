@@ -8,9 +8,12 @@
 //   5. 流式 chatStreamWithUsage 并聚合 usage / 结算事件
 //
 // 说明：
-//   - SDK 自动按 ManagedModel 的 preferredFormat / supportedFormats 选 Anthropic
-//     或 OpenAI adapter，调用方无需关心。
+//   - SDK 自动按 ManagedModel 的 preferred_format / supported_formats（snake_case
+//     wire 字段）选 Anthropic 或 OpenAI adapter，调用方无需关心。详见
+//     src/models/adapters/index.ts:getAdapterForModel。
 //   - 金额 / 余额字段是 string（避免 JS number 精度损失），不要做浮点运算。
+//   - ChatRequest 走 snake_case wire 字段（max_tokens 等），与上游 Go json tag 对齐；
+//     ManagedModel 顶层多为 camelCase（modelId / isEnabled / inputModalities）。
 
 import { Client, allScopes, FileTokenStore } from '@acosmi/sdk-ts';
 

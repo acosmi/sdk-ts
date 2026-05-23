@@ -1,7 +1,11 @@
 // auth.ts — 端口自 acosmi-sdk-go/auth.go (474 行)
 //
-// 跨平台 OAuth 2.1 PKCE helpers + Node-only authorize (HTTP callback server)。
-// 浏览器调用 authorize 会抛错 — 浏览器侧应自行实现 popup window + redirect handler。
+// 跨平台 OAuth 2.1 PKCE helpers + Node-only loopback authorize (HTTP callback server)。
+//
+// 浏览器侧 (v1.4.0+): authorize() 会抛错 (无 loopback HTTP server), 改用同文件内的
+// Web OAuth 原语 — discoverWebOAuthMetadata / registerWebOAuthClient /
+// createWebAuthorizationRequest / completeWebAuthorizationRequest。由调用方实现
+// popup / 同窗口 redirect handler, SDK 负责 PKCE / state 校验 / token 兑换。
 
 import type { ClientRegistration, ServerMetadata, TokenResponse, TokenSet } from './types';
 
@@ -327,7 +331,10 @@ export interface AuthorizeResult {
  *   3. 接收回调拿到 authorization code
  *   4. 返回 code 供后续 token 交换
  *
- * 浏览器环境会抛错 — 浏览器侧应自行实现 popup window + redirect handler。
+ * 浏览器环境会抛错 (无 loopback HTTP server)。
+ * 浏览器侧 (v1.4.0+) 请改用本文件下方的 Web OAuth 原语：
+ *   createWebAuthorizationRequest + completeWebAuthorizationRequest
+ *   (SDK 负责 PKCE / state 校验; popup / redirect handler 由调用方实现)
  */
 export async function authorize(
   meta: ServerMetadata,

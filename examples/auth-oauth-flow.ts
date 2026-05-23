@@ -11,8 +11,12 @@
 // 说明：
 //   - 大多数场景直接用 `client.login(appName, scopes)` 即可（内部封装了下面全部步骤）。
 //     本示例演示底层 helper，适用于需要自定义授权流程 / 自管 token 的 CLI。
-//   - authorize 仅在 Node 环境可用（需要本地 HTTP 回调 server）；浏览器侧应自行实现
-//     popup window + redirect handler。
+//   - authorize 仅在 Node 环境可用（需要本地 HTTP 回调 server）。
+//   - 浏览器侧（无 loopback server）请改用 v1.4.0+ Web OAuth 原语：
+//     discoverWebOAuthMetadata + registerWebOAuthClient +
+//     createWebAuthorizationRequest + completeWebAuthorizationRequest，
+//     由调用方实现 popup / 同窗口 redirect handler，SDK 负责 PKCE / state 校验 / token 兑换。
+//     浏览器 token 刷新可配 Config.browserRefreshMode / refreshProxyURL (v1.4.1+) 规避 issuer CORS 403。
 
 import {
   discover,

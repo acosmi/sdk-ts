@@ -90,15 +90,15 @@ Report scopes are split by action:
   again) so the new scope is granted.
 - `ScopeComplianceReportsPublish` — `publishReport` (also requires step-up).
 
-Contract-template scopes (added in v1.10.0) are split by direction and do not
-require step-up:
+Contract-template scopes (added in v1.5.0; originally planned as v1.10.0 — see
+CHANGELOG §"S5：合同模板") are split by direction and do not require step-up:
 
 - `ScopeComplianceContractTemplateRead` — `getContractTemplate`,
   `listContractTemplates`, `listContractTemplateVersions`.
 - `ScopeComplianceContractTemplateWrite` — `createContractTemplate`,
   `updateContractTemplate`, `deleteContractTemplate`,
   `uploadContractTemplatePdf`, `publishContractTemplate`,
-  `archiveContractTemplate`. Tokens issued before v1.10.0 do **not** carry these
+  `archiveContractTemplate`. Tokens issued before v1.5.0 do **not** carry these
   scopes; existing users must re-authorize so the new scopes are granted.
 
 ## Base URL
@@ -244,7 +244,8 @@ if (view.status === 'SUCCESS') {
 
 ## Paginated Lists
 
-Since v1.6.0 the SDK exposes paginated list reads against the backend
+Since v1.5.0 (originally planned as v1.6.0 — see CHANGELOG §"S1：6 个分页列表")
+the SDK exposes paginated list reads against the backend
 compliance gateway (`GET .../page`). Each returns a yudao `PageResult<T>`
 (`{ total, list }` — the single SDK-wide pagination result shape, an alias of
 `YudaoPageResult<T>`):
@@ -330,7 +331,8 @@ release.
 
 ## Capabilities And Operation Projection
 
-Since v1.7.0 the SDK exposes the compliance gateway S2 reads: a capability gate
+Since v1.5.0 (originally planned as v1.7.0 — see CHANGELOG §"S2：capabilities +
+operations 投影") the SDK exposes the compliance gateway S2 reads: a capability gate
 query and an operation-projection view.
 
 ```ts
@@ -421,7 +423,8 @@ by the backend as `yyyy-MM-dd HH:mm:ss`; the SDK passes them through verbatim.
 
 ## TSA Readonly Views
 
-Since v1.8.0 the SDK exposes the compliance gateway S3 reads: two timestamp
+Since v1.5.0 (originally planned as v1.8.0 — see CHANGELOG §"S3：TSA readonly
+视图") the SDK exposes the compliance gateway S3 reads: two timestamp
 authority (TSA) readonly views.
 
 ```ts
@@ -463,7 +466,8 @@ when no timestamps exist.
 
 ## Envelope Completion
 
-Since v1.9.0 the SDK exposes the compliance gateway S4 envelope-completion
+Since v1.5.0 (originally planned as v1.9.0 — see CHANGELOG §"S4：envelope 收尾
++ void") the SDK exposes the compliance gateway S4 envelope-completion
 surface: two readonly views and one write.
 
 ```ts
@@ -526,7 +530,8 @@ methods in this release.
 
 ## Contract Templates
 
-Since v1.10.0 the SDK exposes the compliance gateway S5 contract-template
+Since v1.5.0 (originally planned as v1.10.0 — see CHANGELOG §"S5：合同模板")
+the SDK exposes the compliance gateway S5 contract-template
 surface: a `DRAFT` → `PUBLISHED` → `ARCHIVED` lifecycle with PDF upload, field
 overlay, and immutable version snapshots.
 
