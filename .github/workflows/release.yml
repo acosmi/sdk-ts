@@ -13,6 +13,13 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    # JS-based actions (actions/checkout@v4, actions/setup-node@v4,
+    # softprops/action-gh-release@v2) run their bundled JS on Node 24 instead of
+    # the soon-to-be-deprecated Node 20. GitHub Actions will switch the default
+    # to Node 24 on 2026-06-02; opting in early keeps release.yml run logs free
+    # of the Node-20 deprecation annotation.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,7 +27,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # SDK ships engines.node >= 18 (consumer compat unchanged). CI itself
+          # runs on Node 24 to align with the JS-action runtime above.
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
