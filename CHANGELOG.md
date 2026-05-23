@@ -9,299 +9,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.11.0] — 2026-05-22
+## [1.5.0] — 2026-05-23
 
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-4 用印
-> 执行记录 — compliance gateway S6**：在 `client.compliance.*` 上新增 1 个用印
-> 执行（seal use）分页只读方法，对接已合并的后端 **G6** 契约。**纯增量、向后
-> 兼容**——不改任何既有导出符号的签名或行为；8 个占位命名空间维持 `export {}`；
-> `typecheck` / `lint` / `vitest` / `build` / `test:pack` / `docs` 全绿。
-
-### Added
-
-- **`client.compliance.listSealUses(req?, signal?)`** —
-  `GET /compliance/seal-uses/page`，返回 `PageResult<SealUsePageItem>`。
-  **GET 读**——继承 `PageRequest`，过滤支持 `sealId` / `envelopeId` /
-  `usageStatus` / `createTimeStart` / `createTimeEnd`。一次用印执行（seal use）
-  描述 envelope / contract / seal / 审批联动后【真正调用 provider 落章】的那
-  一笔记录，与 envelope 领域状态正交。SDK-safe——不含 provider raw payload /
-  证书 / storage key。
-- **新增 2 个 compliance 领域类型**（`src/compliance/seal-approval/types.ts`，
-  与既有 seal-domain 类型同模块）：`SealUsePageItem` / `ListSealUsesRequest`。
-  经 `compliance/index.ts` barrel 对外导出。
-
-### Unchanged
-
-- **Scope**：复用既有 `ScopeComplianceContractSigningRead`
-  (`compliance:contract_signing:read`) ——后端 G6 端点声明同一 read scope，
-  不新增 scope。
-- **印章授权 / 印章 CRUD（U-3 / U-11）**：仍为后端推迟项（CFCA 私有 jar /
-  W3 闸门），本版本不引入 SDK 方法。
-
-> Method Status：`listSealUses` 为 `production-ready`（compliance gateway S6 /
-> G6 契约、端点、DTO、SDK 测试、文档全部闭环）。
-
----
-
-## [1.10.0] — 2026-05-22
-
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-2 合同
-> 模板 — compliance gateway S5**：在 `client.compliance.*` 上新增 9 个合同模板
-> 方法 + 2 个新 scope，对接已合并的后端 **G5** 契约。**纯增量、向后兼容**——不改
-> 任何既有导出符号的签名或行为；8 个占位命名空间维持 `export {}`；`typecheck` /
-> `lint` / `vitest` / `build` / `test:pack` / `docs` 全绿。
-
-### Added
-
-- **`client.compliance.createContractTemplate(req, options?)`** —
-  `POST /compliance/contract-templates`，返回 `ContractTemplateResp`。**写方法**：
-  走 compliance 写路径——`Idempotency-Key`、不重试、`401` 不刷新重放。模板创建
-  后初始状态为 `DRAFT`。
-- **`client.compliance.updateContractTemplate(id, req, options?)`** —
-  `POST /compliance/contract-templates/{id}`，仅 DRAFT 状态。返回
-  `ContractTemplateResp`。**写方法**：所有字段可选，缺省字段视为不修改。
-- **`client.compliance.deleteContractTemplate(id, options?)`** —
-  `POST /compliance/contract-templates/{id}/delete`，仅 DRAFT 状态，返回 `void`。
-  **写方法**：已发布的模板应改走 `archive`。
-- **`client.compliance.getContractTemplate(id, signal?)`** —
-  `GET /compliance/contract-templates/{id}`，返回 `ContractTemplateResp`。**GET 读**。
-- **`client.compliance.listContractTemplates(req?, signal?)`** —
-  `GET /compliance/contract-templates/page`，返回
-  `PageResult<ContractTemplatePageItem>`。**GET 读**——继承 `PageRequest`，过滤
-  支持 `status` / `createTimeStart` / `createTimeEnd`。列表项不下发 `fields`。
-- **`client.compliance.uploadContractTemplatePdf(id, req, options?)`** —
-  `POST /compliance/contract-templates/{id}/pdf`，请求体 `{ pdfBase64 }`，返回
-  `ContractTemplateResp`（含 `pdfHash` / `pdfPageCount`）。**写方法**：SDK 不
-  在客户端做 PDF 解析 / 几何校验。
-- **`client.compliance.publishContractTemplate(id, options?)`** —
-  `POST /compliance/contract-templates/{id}/publish`，DRAFT → PUBLISHED，返回
-  `ContractTemplateResp`。**写方法**：publish 后 `currentVersion` 递增、`fields`
-  与 `pdfHash` 同步固化进版本表。
-- **`client.compliance.archiveContractTemplate(id, options?)`** —
-  `POST /compliance/contract-templates/{id}/archive`，PUBLISHED → ARCHIVED，返回
-  `ContractTemplateResp`。**写方法**：归档后只读，不允许 publish / 编辑 / 删除。
-- **`client.compliance.listContractTemplateVersions(id, signal?)`** —
-  `GET /compliance/contract-templates/{id}/versions`，返回
-  `ContractTemplateVersion[]`（普通数组，非 `PageResult`）。**GET 读**——每次
-  publish 落一个不可变快照。
-- **新增 compliance `template` 子域类型**（`src/compliance/template/types.ts`）：
-  `ContractTemplateField` / `ContractTemplateFieldType` / `ContractTemplateResp`
-  / `ContractTemplatePageItem` / `ContractTemplateStatus` /
-  `ContractTemplateVersion` / `CreateContractTemplateRequest` /
-  `UpdateContractTemplateRequest` / `UploadContractTemplatePdfRequest` /
-  `ListContractTemplatesRequest`。经 `compliance/index.ts` barrel 对外导出。
-- **新增 2 个 scope 常量**：`ScopeComplianceContractTemplateRead`
-  (`compliance:contract_template:read`) /
-  `ScopeComplianceContractTemplateWrite` (`compliance:contract_template:write`)。
-  同步加入 `ComplianceScope` 类型联合与 `complianceScopes()` 返回顺序——总数
-  13 → 15。读方法要求 `:read`、写方法要求 `:write`；不要求 step-up。
-
-> Method Status：9 个方法均为 `production-ready`（compliance gateway S5 / G5
-> 契约、端点、DTO、SDK 测试、文档全部闭环）。无 `gated` 方法。
-
----
-
-## [1.9.0] — 2026-05-22
-
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-10 /
-> U-12 子集 — compliance gateway S4 签署 envelope 收尾**：在
-> `client.compliance.*` 上新增 3 个 envelope 收尾方法，对接已合并的后端 **G4**
-> 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；8 个占位命名
-> 空间维持 `export {}`；`typecheck` / `lint` / `vitest` / `build` / `test:pack`
-> / `docs` 全绿。
-
-### Added
-
-- **`client.compliance.listEnvelopeContracts(envelopeId, signal?)`**
-  （compliance gateway S4 / 缺口总账 U-10）——`GET
-  /compliance/signing-envelopes/{id}/contracts`，返回
-  `EnvelopeContractItem[]`（普通数组，非 `PageResult`）。后端 G4 为每份挂在该
-  envelope 上的合同返回一条视图：`id` / `envelopeId` / `contractNo` / `title`
-  / `mimeType` / `size` / `hashAlgorithm` / `contentHash` /
-  `signedContentHash?` / `status` / `createTime`。SDK-safe——不含合同原文 /
-  storage key / provider raw payload。
-- **`client.compliance.listEnvelopeProviderRequests(envelopeId, signal?)`**
-  （compliance gateway S4 / 缺口总账 U-10）——`GET
-  /compliance/signing-envelopes/{id}/provider-requests`，返回
-  `OperationPageItem[]`（普通数组，非 `PageResult`）。**复用**操作投影类型
-  `OperationPageItem`（不另造同名类型），描述每次 provider 请求本身的执行进度。
-- **`client.compliance.voidEnvelope(envelopeId, req, options?)`**（compliance
-  gateway S4 / 缺口总账 U-12）——`POST /compliance/signing-envelopes/{id}/void`，
-  作废一个签署 envelope，返回 `boolean`。**写方法**：走 compliance 写路径——
-  发送前 `ensureToken` 一次、不自动重试、`401` 不刷新重放；支持
-  `Idempotency-Key` header。`VoidEnvelopeRequest = { reason: string }`，作废原因
-  随 JSON body 提交。
-- **新增 compliance `signing` 子域类型**（`src/compliance/signing/types.ts`）：
-  `EnvelopeContractItem`（镜像后端 `EnvelopeContractItem`）/
-  `VoidEnvelopeRequest`。经 `compliance/index.ts` barrel 对外导出。
-- **GET 读 / 写路径区分**：2 个 `list*` 方法走既有 compliance GET 读路径
-  （`401` 单次安全刷新重放）；`voidEnvelope` 走 compliance 写路径
-  （`Idempotency-Key`、不重试、`401` 不重放）。
-
-> envelope 收尾的 send / remind / authorize / download / token 等动作在后端
-> S4 范围之外暂缓——本版本不暴露对应 SDK 方法。
-
----
-
-## [1.8.0] — 2026-05-22
-
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-7 TSA
-> readonly views — compliance gateway S3**：在 `client.compliance.*` 上新增两个
-> 时间章授权机构（TSA）只读视图方法，对接已合并的后端 **G3** 契约。**纯增量、
-> 向后兼容**——不改任何既有导出符号的签名或行为；8 个占位命名空间维持
-> `export {}`；`typecheck` / `lint` / `vitest` / `build` / `test:pack` / `docs`
-> 全绿。
-
-### Added
-
-- **`client.compliance.listTsaProviders(signal?)`**（compliance gateway S3 /
-  缺口总账 U-7）——`GET /compliance/timestamps/providers`，返回
-  `TsaProvider[]`。后端 G3 为每个 TSA provider 返回一条 provider 视图：
-  `name` / `environment` / `available`。只读视图，不含 provider 端点 / 凭证 /
-  证书等内部接入材料。
-- **`client.compliance.getTsaStats(signal?)`**（compliance gateway S3 / 缺口
-  总账 U-7）——`GET /compliance/timestamps/stats`，返回 `TsaStats`：时间章总数
-  `total` + 按校验状态分桶的计数 `byVerificationStatus`（`Record<string,
-  number>`，键为校验状态枚举名，值为计数）。
-- **新增 compliance `timestamp` 子域类型**（`src/compliance/timestamp/types.ts`）：
-  `TsaProvider`（镜像后端 `TsaProviderVO`）/ `TsaStats`（镜像后端
-  `TsaStatsVO`）。经 `compliance/index.ts` barrel 对外导出。
-- **GET 读语义**：2 个新方法均走既有 compliance GET 读路径——`401` 单次安全
-  刷新重放、不禁用。
-
----
-
-## [1.7.0] — 2026-05-22
-
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-5
-> operation projection + U-6 capabilities — compliance gateway S2**：在
-> `client.compliance.*` 上新增能力闸门查询与操作投影读方法，对接已合并的后端
-> **G2** 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；8 个
-> 占位命名空间维持 `export {}`；`typecheck` / `lint` / `vitest` / `build` /
-> `test:pack` / `docs` 全绿。
-
-### Added
-
-- **`client.compliance.getCapabilities(signal?)`**（compliance gateway S2 /
-  缺口总账 U-6）——`GET /compliance/capabilities`，返回
-  `ComplianceCapability[]`。后端 G2 为每个高风险 / 收费动作（`signEnvelope` /
-  `createH5SigningUrl` / `publishReport` / `approveSealApproval` /
-  `executeSealUse` / `createSeal`）返回一条能力闸门视图：`executable` /
-  `state` / `requiredScopes` / `requiredStepUp` / `reason`。调用方在高风险动作
-  执行【前】查询做门控，拿不到能力时必须 fail-closed。
-- **`client.compliance.getFeatureGate(action, signal?)`**——便捷方法，拉取
-  `getCapabilities` 列表并返回 `action` 匹配的那一条（无匹配返回
-  `undefined`）。**每次调用产生一次网络请求**——门控多个动作时应改用
-  `getCapabilities` 一次取回再本地查表。
-- **`client.compliance.listOperations(req?, signal?)`**（compliance gateway
-  S2 / 缺口总账 U-5）——`GET /compliance/operations/page`，返回 yudao
-  `PageResult<OperationPageItem>`。过滤项 `status` / `createTimeStart` /
-  `createTimeEnd`（均可选），继承共享 `PageRequest` 分页 / 排序字段。
-- **`client.compliance.getOperation(id, signal?)`**——`GET
-  /compliance/operations/{id}`（`id` 为数值行主键，非 `operationId` 幂等键），
-  返回 `OperationDetail`。
-- **新增 compliance `operation` 子域类型**（`src/compliance/operation/types.ts`，
-  缺口总账 §9.5 子域归位）：`ComplianceCapability`（镜像后端 `CapabilityVO`，
-  `state` 复用 `src/shared/gate.ts` 的 `FeatureGateState`，不另造同名近似类型）/
-  `OperationPageItem` / `OperationDetail` / `ListOperationsRequest`（继承共享
-  `PageRequest`）。经 `compliance/index.ts` barrel 对外导出。
-- **GET 读语义**：4 个新方法均走既有 compliance GET 读路径——`401` 单次安全
-  刷新重放、不禁用。`createTimeStart` / `createTimeEnd` 为调用方提供的【原样
-  字符串】，后端按 `yyyy-MM-dd HH:mm:ss` 解析，SDK 原样透传，不做格式校验或
-  时区转换。
-
----
-
-## [1.6.0] — 2026-05-22
-
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**U-1
-> compliance gateway S1**：6 个 compliance 分页列表方法，对接已合并的后端
-> **G1** 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；8 个
-> 占位命名空间维持 `export {}`；`typecheck` / `lint` / `vitest`(168, +11) /
-> `build` / `test:pack` / `docs` 全绿。
-
-### Added
-
-- **`client.compliance.list*` 6 个分页列表读方法**（compliance gateway S1 /
-  缺口总账 U-1）——对接后端 G1 的 6 个 `GET .../page` 端点，均返回 yudao
-  `PageResult<T>`（`{ total, list }`，沿用 v1.5.0 `src/shared/pagination.ts`
-  的 `PageResult` 别名，不引入第二套分页结果结构）：
-  - `listEvidenceAssets(req?, signal?)` — `GET /compliance/evidence/assets/page`，
-    过滤项 `assetType` / `status` / `createTimeStart` / `createTimeEnd`。
-  - `listTimestamps(req?, signal?)` — `GET /compliance/timestamps/page`，过滤项
-    `provider` / `verificationStatus` / `createTimeStart` / `createTimeEnd`。
-  - `listEvidencePackages(req?, signal?)` — `GET /compliance/evidence/packages/page`，
-    过滤项 `status` / `createTimeStart` / `createTimeEnd`。
-  - `listReports(req?, signal?)` — `GET /compliance/reports/page`，过滤项
-    `status` / `createTimeStart` / `createTimeEnd`。
-  - `listSigningEnvelopes(req?, signal?)` — `GET /compliance/signing-envelopes/page`，
-    过滤项 `status` / `createTimeStart` / `createTimeEnd`。
-  - `listSealApprovals(req?, signal?)` — `GET /compliance/seal-approvals/page`，
-    过滤项 `status` / `createTimeStart` / `createTimeEnd`（与不分页的
-    `listPendingSealApprovals` 区分：本方法支持分页与状态 / 时间过滤）。
-- **6 个 `*PageItem` 列表项类型 + 6 个 `List*Request` 请求类型**——按子域归位
-  （缺口总账 §9.5）：`EvidenceAssetPageItem` / `EvidencePackagePageItem` /
-  `ListEvidenceAssetsRequest` / `ListEvidencePackagesRequest` 入
-  `compliance/evidence/types.ts`；`TimestampPageItem` / `ListTimestampsRequest`
-  入 `compliance/timestamp/types.ts`；`ReportPageItem` / `ListReportsRequest`
-  入 `compliance/report/types.ts`；`SigningEnvelopePageItem` /
-  `ListSigningEnvelopesRequest` 入 `compliance/signing/types.ts`；
-  `SealApprovalPageItem` / `ListSealApprovalsRequest` 入
-  `compliance/seal-approval/types.ts`。所有 `List*Request` 继承共享
-  `PageRequest`（`pageNo` / `pageSize` / `sortBy` / `sortDirection`）。
-  `*PageItem` 是对应详情视图的 SDK-safe 子集 + `createTime`（ISO-8601）；
-  不含任何 provider raw / 证书密钥 / storage / 合同原文字段。
-- **GET 读语义**：6 个 list 方法走既有 compliance GET 读路径——`401` 单次安全
-  刷新重放、不禁用。
-- `createTimeStart` / `createTimeEnd` 为调用方提供的【原样字符串】，后端按
-  `yyyy-MM-dd HH:mm:ss` 解析；SDK 不做格式校验或时区转换，原样透传查询参数。
-
----
-
-## [1.5.0] — 2026-05-22
-
-> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账
-> （`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）**Phase 0.3 /
-> 0.5**：沉淀跨域共享 DTO + 契约测试。**纯增量、向后兼容**——不改任何既有导出
-> 符号的签名或行为；`typecheck` / `lint` / `vitest`(157, +17) / `build` 全绿。
+> 众律宝 SaaS 工作台 SDK / 后端能力缺口总账（`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）
+> **compliance gateway S1–S6 全量 + Phase 0.3/0.5 共享 DTO**：在 `client.compliance.*`
+> 上新增 22 个方法、2 个新 scope，沉淀 `src/shared/` 跨域共享原语，对接已合并的
+> 后端 **G1–G6** 契约。**纯增量、向后兼容**——不改任何既有导出符号的签名或行为；
+> `tenant` / `iam` / `apiClients` / `operations` / `audit` / `gateway` / `mcp` /
+> `certification` 8 个占位命名空间继续维持 `export {}`；`typecheck` / `lint` /
+> `vitest`(168) / `build` / `test:pack` / `docs` 全绿。
 >
-> ⚠️ 本版本**不含** `tenant` / `iam` / `apiClients` / `operations` / `audit` /
-> `gateway` / `mcp` / `certification` 8 个占位命名空间的真实导出，也不含
-> `casehall` 命名空间与 `compliance` U-1…U-12 方法——它们强依赖当前**尚不存在**
-> 的后端端点（Go 控制面 / Java compliance 分页 / `yudao-module-casehall`），
-> 提前写空转方法属编造契约（违反缺口总账 §2 边界）。待后端契约就绪后按
-> §11 Phase 1+ 推进。
+> 历史注记：本仓库内部 1.5.0/1.6.0/1.7.0/1.8.0/1.9.0/1.10.0/1.11.0 七个内部版本
+> 已合并为单一 1.5.0 发布（1.11.0 已 npm unpublish，留作历史尘埃）。
 
-### Added
+### Added — Phase 0.3 / 0.5：跨域共享 DTO（原 1.5.0 / 缺口总账 §9.4 / §9.5）
 
-- **`src/shared/` 跨域共享 DTO**（缺口总账 §9.4 / §9.5）——为后续平台控制面 /
-  `compliance.list*` 等命名空间提供统一原语，按关注点分文件：
-  - `shared/pagination.ts` — `PageRequest`、`SortDirection`，以及
-    **`PageResult<T>`（刻意做成既有 `YudaoPageResult<T>` 的别名**，不引入第二套
-    `{list,total}` 分页结果结构）。
-  - `shared/operation.ts` — `OperationId`、`OperationSource`、`OperationStatus`、
-    `VerifyStatus`、`IdempotencyKey` 类型与 `IdempotencyKeyHeader` 常量
+- **`src/shared/` 跨域共享 DTO**——为平台控制面 / `compliance.list*` 等命名空间提供
+  统一原语，按关注点分文件：
+  - `shared/pagination.ts` — `PageRequest`、`SortDirection`，以及 **`PageResult<T>`**
+    （刻意做成既有 `YudaoPageResult<T>` 的别名，不引入第二套 `{list,total}` 结构）。
+  - `shared/operation.ts` — `OperationId` / `OperationSource` / `OperationStatus` /
+    `VerifyStatus` / `IdempotencyKey` 类型与 `IdempotencyKeyHeader` 常量
     （`'Idempotency-Key'`，写接口幂等键 header 单一真相源）；`ProviderRequestStatus`
     **复用**既有 `ComplianceProviderRequestStatus`，不另造同名近似类型。
   - `shared/retry-advice.ts` — `RetryAdvice` 统一失败补救模型 + `RetryAdviceReason`
     （11 项）+ `retryReasonForComplianceKey()` / `retryReasonForOAuthError()`
-    映射函数 + `complianceErrorToRetryAdvice()` 叠加投影。`RetryAdvice` 是
-    **叠加层**——独立类型、独立字段，**不修改也不替换** `core/retry.ts`
-    `RetryPolicy` 与 `compliance/errors.ts` `ComplianceErrorInfo`；`reason` 是
-    既有三套错误码登记表（Java 数值码 / SDK 符号 key / Go OAuth 字符串）的
-    归一化映射，不开第四套登记表。
-  - `shared/principal.ts` — `PrincipalRef`、`TenantRef`、`ApiClientRef` 轻量引用。
-  - `shared/gate.ts` — `FeatureGateStatus`、`FeatureGateState`、`StepUpStatus`、
-    `GateQuota`、`BillingPreflightResult`（gate / capability / step-up / preflight
+    映射函数 + `complianceErrorToRetryAdvice()` 叠加投影。**叠加层**——独立类型，
+    不修改也不替换 `core/retry.ts` `RetryPolicy` 与 `compliance/errors.ts`
+    `ComplianceErrorInfo`。
+  - `shared/principal.ts` — `PrincipalRef` / `TenantRef` / `ApiClientRef` 轻量引用。
+  - `shared/gate.ts` — `FeatureGateStatus` / `FeatureGateState` / `StepUpStatus` /
+    `GateQuota` / `BillingPreflightResult`（gate / capability / step-up / preflight
     查询形态）。
 - `test/shared.test.ts` — 17 个契约测试，覆盖别名等价 / 幂等键常量 / reason 映射 /
   叠加投影只读性 / `classifyComplianceError` 零回归红线。
+
+### Added — S1：6 个分页列表（原 1.6.0 / U-1 / 后端 G1）
+
+- **`client.compliance.list*` 6 个分页列表读方法**——对接后端 G1 的 6 个 `GET .../page`
+  端点，均返回 yudao `PageResult<T>`：
+  - `listEvidenceAssets(req?, signal?)` — `GET /compliance/evidence/assets/page`，
+    过滤项 `assetType` / `status` / `createTimeStart` / `createTimeEnd`。
+  - `listTimestamps(req?, signal?)` — `GET /compliance/timestamps/page`，过滤项
+    `provider` / `verificationStatus` / `createTimeStart` / `createTimeEnd`。
+  - `listEvidencePackages(req?, signal?)` — `GET /compliance/evidence/packages/page`。
+  - `listReports(req?, signal?)` — `GET /compliance/reports/page`。
+  - `listSigningEnvelopes(req?, signal?)` — `GET /compliance/signing-envelopes/page`。
+  - `listSealApprovals(req?, signal?)` — `GET /compliance/seal-approvals/page`。
+- **6 个 `*PageItem` + 6 个 `List*Request` 类型**——按子域归位；所有 `List*Request`
+  继承共享 `PageRequest`。`*PageItem` 是详情视图的 SDK-safe 子集 + `createTime`，
+  不含 provider raw / 证书 / storage / 合同原文。
+
+### Added — S2：capabilities + operations 投影（原 1.7.0 / U-5/U-6 / 后端 G2）
+
+- **`client.compliance.getCapabilities(signal?)`** — `GET /compliance/capabilities`，
+  返回 `ComplianceCapability[]`。后端 G2 为每个高风险 / 收费动作返回闸门视图：
+  `executable` / `state` / `requiredScopes` / `requiredStepUp` / `reason`。
+  调用方在高风险动作执行【前】查询做门控，拿不到能力时必须 fail-closed。
+- **`client.compliance.getFeatureGate(action, signal?)`** — 便捷方法（每次调用一次
+  网络请求，多个动作请改用 `getCapabilities` 一次取回本地查表）。
+- **`client.compliance.listOperations(req?, signal?)`** — `GET /compliance/operations/page`，
+  返回 `PageResult<OperationPageItem>`。
+- **`client.compliance.getOperation(id, signal?)`** — `GET /compliance/operations/{id}`
+  （数值行主键，非 `operationId` 幂等键），返回 `OperationDetail`。
+- **新增 `compliance/operation/` 子域类型**：`ComplianceCapability` / `OperationPageItem` /
+  `OperationDetail` / `ListOperationsRequest`。
+
+### Added — S3：TSA readonly 视图（原 1.8.0 / U-7 / 后端 G3）
+
+- **`client.compliance.listTsaProviders(signal?)`** — `GET /compliance/timestamps/providers`，
+  返回 `TsaProvider[]`，每个 provider：`name` / `environment` / `available`。
+- **`client.compliance.getTsaStats(signal?)`** — `GET /compliance/timestamps/stats`，
+  返回 `TsaStats`：总数 + 按校验状态分桶计数。
+- **新增 `compliance/timestamp/` 子域类型**：`TsaProvider` / `TsaStats`。
+
+### Added — S4：envelope 收尾 + void（原 1.9.0 / U-10/U-12 子集 / 后端 G4）
+
+- **`client.compliance.listEnvelopeContracts(envelopeId, signal?)`** — `GET
+  /compliance/signing-envelopes/{id}/contracts`，返回 `EnvelopeContractItem[]`。
+- **`client.compliance.listEnvelopeProviderRequests(envelopeId, signal?)`** — `GET
+  /compliance/signing-envelopes/{id}/provider-requests`，返回 `OperationPageItem[]`
+  （**复用**操作投影类型）。
+- **`client.compliance.voidEnvelope(envelopeId, req, options?)`** — `POST
+  /compliance/signing-envelopes/{id}/void`，**写方法**：`Idempotency-Key`、不重试、
+  `401` 不刷新重放。`VoidEnvelopeRequest = { reason: string }`。
+- **新增 `compliance/signing/` 子域类型**：`EnvelopeContractItem` / `VoidEnvelopeRequest`。
+
+### Added — S5：合同模板（原 1.10.0 / U-2 / 后端 G5）
+
+- **9 个合同模板方法**：
+  - `createContractTemplate` (POST，DRAFT 初始)
+  - `updateContractTemplate` (POST，仅 DRAFT)
+  - `deleteContractTemplate` (POST，仅 DRAFT)
+  - `getContractTemplate` (GET)
+  - `listContractTemplates` (GET 分页)
+  - `uploadContractTemplatePdf` (POST `{ pdfBase64 }`)
+  - `publishContractTemplate` (POST，DRAFT → PUBLISHED，版本快照固化)
+  - `archiveContractTemplate` (POST，PUBLISHED → ARCHIVED)
+  - `listContractTemplateVersions` (GET，普通数组)
+- **新增 `compliance/template/` 子域类型**：`ContractTemplateField` /
+  `ContractTemplateFieldType` / `ContractTemplateResp` / `ContractTemplatePageItem` /
+  `ContractTemplateStatus` / `ContractTemplateVersion` / `CreateContractTemplateRequest` /
+  `UpdateContractTemplateRequest` / `UploadContractTemplatePdfRequest` /
+  `ListContractTemplatesRequest`。
+- **新增 2 个 scope 常量**：`ScopeComplianceContractTemplateRead`
+  (`compliance:contract_template:read`) / `ScopeComplianceContractTemplateWrite`
+  (`compliance:contract_template:write`)。`ComplianceScope` 联合与 `complianceScopes()`
+  总数 13 → 15。读方法要求 `:read`、写方法要求 `:write`；不要求 step-up。
+
+### Added — S6：用印执行记录（原 1.11.0 / U-4 / 后端 G6）
+
+- **`client.compliance.listSealUses(req?, signal?)`** — `GET /compliance/seal-uses/page`，
+  返回 `PageResult<SealUsePageItem>`，过滤支持 `sealId` / `envelopeId` /
+  `usageStatus` / `createTimeStart` / `createTimeEnd`。一次 seal use 描述
+  envelope / contract / seal / 审批联动后【真正调用 provider 落章】的那一笔记录，
+  与 envelope 领域状态正交。SDK-safe——不含 provider raw payload / 证书 / storage key。
+- **新增 2 个 compliance 领域类型**（`src/compliance/seal-approval/types.ts`）：
+  `SealUsePageItem` / `ListSealUsesRequest`。
+- **Scope 复用**：复用既有 `ScopeComplianceContractSigningRead`
+  (`compliance:contract_signing:read`) ——后端 G6 端点声明同一 read scope，不新增 scope。
+
+### Unchanged
+
+- **印章授权 / 印章 CRUD（U-3 / U-11）**：仍为后端推迟项（CFCA 私有 jar / W3 闸门），
+  本版本不引入 SDK 方法。
+- **envelope send / remind / authorize / download / token** 等动作：后端 G4 范围之外
+  暂缓，本版本不暴露对应 SDK 方法。
+
+> Method Status：本次新增 22 个方法均为 `production-ready`（compliance gateway
+> S1–S6 / G1–G6 契约、端点、DTO、SDK 测试、文档全部闭环）。无 `gated` 方法。
 
 ---
 
