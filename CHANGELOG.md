@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — devDep upgrade（消除 4 项 moderate Dependabot alerts）
+
+- `vitest` `^1.0.0` → `^4.1.7`（跨 3 major），传递性把 `vite` `5.4.21` → `8.0.14`
+  / `esbuild` 路径升到 fixed 区间，消除：
+  - **GHSA-67mh-4wv8-2f99** — esbuild dev server CORS bypass（fix: 0.25.0）
+  - **GHSA-4w7w-66w2-5vf9** — vite path traversal in optimized deps `.map` handling（fix: 6.4.2）
+- **Consumer 零影响**：vitest/vite/esbuild 全在 devDependencies，dist tarball 与
+  package.json `engines.node >=18` 不变；不需要打 tag / 发新版。
+- 验证：`npm audit` 0 vulnerabilities / `vitest 4.1.7` 17 文件 214 case
+  全绿 / typecheck / lint / build / test:pack consumer 视角 PASS / docs 重生
+  无新增 errors。
+
 ---
 
 ## [1.5.1] — 2026-05-23
