@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.1] — 2026-05-23
+
+> **Docs / examples patch — 无 API 变化**。对 README、`docs/compliance.md`、`docs/开发与发布手册.md`、`examples/`、源码注释做全量复核与修订，消除发现的 8 项漂移与遗漏。无 runtime 行为变更、无新增/移除导出符号、无 wire-format 变化；`typecheck` / `lint` / `vitest`(214) / `build` / `test:pack` 全绿。
+
+### Changed — README.md
+
+- 补全 API 总览表 25+ 漏列方法：`chatMessages` / `chatMessagesStream` / `buildChatRequest` / `loginWithHandler` / `isAuthorized` / `getTokenSet` / 浏览器 Web OAuth 4 原语 / `discoverWithProfile` / `register` / `revokeToken` / `generateState` / `ensureModelCached` / `browseSkillStore` / `getSkillSummary` / `certifySkill` / `getCertificationStatus` / `markAllNotificationsRead` / `deleteNotification` / `unregisterDevice` / `updateNotificationPreference` / WS `connect`/`disconnect`/`isConnected` / `listConsumeRecords` / `invalidateCoefficientCache` / `getTokenPackageDetail` / `listMyOrders` / `Client.create`。
+- 修复 §"双格式红线" 把 `preferredFormat` / `supportedFormats` 错写为 camelCase 的描述——`ManagedModel` 上这两个字段是 snake_case wire 字段；同步说明 `modelId` / `isEnabled` / `inputModalities` 等顶层走 camelCase。
+- 修复 Quick Start / 流式 / Web Search 三个示例的 `ChatRequest` 字段：`maxTokens` → `max_tokens`（与 `src/models/types.ts:ChatRequest.max_tokens` 对齐）。
+- 重写 §"手动 OAuth" 段：`register/authorize/exchangeCode` 全部按 `src/auth/auth.ts` 真实签名重写——`register` 不接 scopes / `authorize` 需 `reg.client_id`+`handler:` 而非 `onEvent:`、返回 `{ result, verifier }` / `exchangeCode` 需 5 个位置参数含 `result.redirectURI` + `verifier`；指向 `examples/auth-oauth-flow.ts` 完整示例；加浏览器 Web OAuth 替代品指引。
+- §错误处理表补 `ModelNotFoundError`（`chat` / `ensureModelCached` listModels 自动刷新后仍未命中）；为既有 `NetworkError` / `StreamError` / `CompliancePollError` 补字段细节。
+- §Agent Runs 段补 `AgentRunStreamEvent` 完整 13 类事件表（`run_started` / `status` / `text_delta` / `reasoning_delta` / `tool_call` / `tool_result` / `local_tool_request` / `artifact` / `sources` / `usage` / `settle` / `error` / `done`）。
+- 新增 §`sanitize` 命名空间小节：列 `client.setDefensiveSanitize` / `setAutoStripEphemeralHistory` / `applyRequestSanitizers` 三个 mixin 方法 + `sanitize.sanitize` / `dropBlocks` / `stripEphemeral` + 17 个 `Block*` 常量 + `MinimalSanitizeConfig` 字段（`maxMessagesTurns` / `permanentDenyBlocks` / `maxImageBytes` / `maxVideoBytes` / `maxPDFBytes`）+ thinking 块硬豁免红线。
+- §历史表 1.5.0 行补"compliance gateway S1-S6 全量 rollup + scope 总数 15"说明。
+
+### Changed — docs/compliance.md
+
+- 6 处版本号漂移修订：`Since v1.6.0 / 1.7.0 / 1.8.0 / 1.9.0 / 1.10.0` + `Contract-template scopes (added in v1.10.0)` → 统一为 `v1.5.0 (originally planned as v1.X.0 — see CHANGELOG §"SN：..."`，避免消费者误以为这些方法在未来版本才有。
+
+### Changed — docs/开发与发布手册.md
+
+- §7 必测清单：`test/compliance-scopes.test.ts — 12 个` → `15 个`，附 12 → 13（v1.3.2）→ 15（v1.5.0 S5）演进注解。
+- §7 新增"Compliance gateway S1-S6 rollup（v1.5.0）"小节，逐 S 列出新增 25+ SDK 方法、对应后端 G1-G6、新增 scope 与 fail-closed 红线。
+
+### Changed — examples/
+
+- `examples/compliance-evidence-timestamp.ts` 补 `ScopeComplianceReportsWrite`（`createReport` 自 v1.3.2 起改用独立 write scope；过去用 `ScopeComplianceReportsRead` 在生产会 401）。
+- `examples/auth-oauth-flow.ts` 顶部注释指向 v1.4.0+ Web OAuth 原语（`discoverWebOAuthMetadata` / `registerWebOAuthClient` / `createWebAuthorizationRequest` / `completeWebAuthorizationRequest`）+ `Config.browserRefreshMode` / `refreshProxyURL` (v1.4.1+) CORS 规避方案。
+- `examples/core-chat.ts` 顶部注释把 `preferredFormat` / `supportedFormats` 改回 snake_case；补 `ChatRequest` snake_case wire / `ManagedModel` 顶层 camelCase 字段命名说明。
+
+### Changed — 源码注释（无 runtime 影响）
+
+- `src/index.ts` 顶部注释从"端口源 acosmi-sdk-go v0.19.0 (一字不差对齐)"改为"自 2026-05-22 起 TS 是主实现 / 事实标准"，与 README §状态 + 手册 §1 / §10 一致。
+- `src/browser.ts` 顶部注释加 v1.4.0+ Web OAuth 替代品 + v1.4.1+ `browserRefreshMode` 指引。
+- `src/auth/auth.ts` 顶部 + `authorize()` doc：从"浏览器侧应自行实现 popup window"改为指向同文件内 Web OAuth 原语。
+- `docs/api/`（TypeDoc 生成）已同步重生成。
+
+### Verified
+
+- `typecheck`：0 errors
+- `vitest`：17 files / **214 tests passed**
+- `npm pack --dry-run`：tarball 内容无变化
+- 跨语言契约印记（snake_case wire / 双 adapter 等地位 / bug-for-bug 行为）零回归
+
+---
+
 ## [1.5.0] — 2026-05-23
 
 > 众律宝 SaaS 工作台 SDK / 后端能力缺口总账（`docs/audit/saas-sdk-backend-capability-gap-register-2026-05-22`）

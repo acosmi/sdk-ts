@@ -3,8 +3,13 @@
 // 与 src/index.ts 等价, 但默认 TokenStore 用 LocalStorage 而非 File。
 // fetch / WebSocket 用浏览器原生 globals。
 //
-// authorize() 在浏览器调用会抛错 (无法启动 HTTP server)
-// — 浏览器侧应自行实现 popup window + redirect handler。
+// 浏览器侧 OAuth 选择 (v1.4.0+):
+//   - Loopback `authorize()` 在浏览器调用会抛错 (无法启动 HTTP server)。
+//   - 改用浏览器 Web OAuth 原语 `createWebAuthorizationRequest` +
+//     `completeWebAuthorizationRequest` (见 auth/auth.ts), 由调用方实现 popup
+//     window / 同窗口 redirect handler, SDK 负责 PKCE / state 校验 / token 兑换。
+//   - 浏览器 token 刷新可配 `Config.browserRefreshMode` / `refreshProxyURL`
+//     (v1.4.1+), 规避 issuer CORS 403。
 
 export * from './index';
 

@@ -7,7 +7,7 @@
 ## 状态
 
 - 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
-- 当前版本：**1.5.0**（沉淀 `src/shared/` 跨域共享 DTO——分页 / operation / retryAdvice / principal / gate 原语；`1.4.2` `src/` 按业务域重组；`1.4.x` 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端；详见 [CHANGELOG](./CHANGELOG.md)）
+- 当前版本：**1.5.1**（文档 / examples / 源码注释全量复核与修订——补 25+ 漏列 API、修 OAuth/Chat 示例签名漂移、`docs/compliance.md` 6 处版本号统一为 1.5.0、`examples/compliance-evidence-timestamp.ts` 补 `compliance:reports:write` scope；无 API / wire-format 变化）。`1.5.0` 沉淀 `src/shared/` 跨域共享 DTO + compliance gateway S1-S6 全量 rollup；`1.4.2` `src/` 按业务域重组；`1.4.x` 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端；详见 [CHANGELOG](./CHANGELOG.md)
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
 - API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
@@ -28,7 +28,7 @@ await client.login('My App', allScopes());
 
 const resp = await client.chat('claude-opus-4-7', {
   messages: [{ role: 'user', content: 'Hello' }],
-  maxTokens: 1024,
+  max_tokens: 1024, // ChatRequest 走 snake_case wire 字段（与上游 Go json tag 对齐）
 });
 console.log(resp.content);
 ```
@@ -42,12 +42,12 @@ SDK 同时提供 **Anthropic + OpenAI 两条 endpoint**，**等地位**，对应
 | `AnthropicAdapter` | `POST /managed-models/:id/anthropic`  | Anthropic 原生格式（含 thinking 等）|
 | `OpenAIAdapter`    | `POST /managed-models/:id/chat`       | OpenAI 兼容格式（DeepSeek/GLM 等）  |
 
-路由由 `getAdapterForModel(model)` 按 ManagedModel 的 `preferredFormat` / `supportedFormats` 决策：
+路由由 `getAdapterForModel(model)` 按 ManagedModel 的 `preferred_format` / `supported_formats` 决策（wire-format 字段，snake_case 与上游 Go json tag 严格对齐；ManagedModel 上其余顶层字段如 `modelId` / `isEnabled` / `inputModalities` 走 camelCase，详见 `src/models/types.ts`）：
 
-1. `preferredFormat` 非空 → 按值（`anthropic` | `openai`）
-2. `supportedFormats` 含 `anthropic` → AnthropicAdapter
-3. `supportedFormats` 含 `openai` → OpenAIAdapter
-4. 两字段均空（旧上游）→ 按 provider 名回落
+1. `preferred_format` 非空 → 按值（`anthropic` | `openai`）
+2. `supported_formats` 含 `anthropic` → AnthropicAdapter
+3. `supported_formats` 含 `openai` → OpenAIAdapter
+4. 两字段均空（旧上游）→ 按 `provider` 名回落
 
 `client.chat()` / `client.chatStream()` 内部自动调 `getAdapterForModel`，使用方无需关心。
 
@@ -66,7 +66,7 @@ SDK 同时提供 **Anthropic + OpenAI 两条 endpoint**，**等地位**，对应
 ```ts
 const stream = client.chatStream('claude-opus-4-7', {
   messages: [{ role: 'user', content: '写一首诗' }],
-  maxTokens: 1024,
+  max_tokens: 1024,
 });
 
 for await (const ev of stream) {
@@ -142,6 +142,24 @@ await client.agentRuns.cancel(run.runId); // safe to call from UI cancel buttons
 
 `stream(runId)` 支持 durable replay：断线后重新连接同一个 run，会先回放已持久化的 Agent Run SSE 事件，再继续消费运行中的事件。`usage` / `settle` 事件会暴露 `exact`、`cacheReadTokens`、`cacheCreateTokens` 等字段，便于下游展示真实结算状态。
 
+**`AgentRunStreamEvent` 完整事件类型**（union，详见 `src/agent-runs/types.ts`；上面示例只演示了 4 种常见分支）：
+
+| `type` | 触发 / 含义 | 关键字段 |
+| --- | --- | --- |
+| `run_started` | 流首事件，确认服务端已开始执行 | `runId`、`sessionId` |
+| `status` | 任务粗粒度状态变化 | `status` (`queued`/`running`/`completed`/`failed`/`cancelled`)、`message?` |
+| `text_delta` | 主要文本输出增量 | `text` |
+| `reasoning_delta` | 推理 / 思考过程增量（debug 用，不一定向终端用户展示） | `text` |
+| `tool_call` | Agent 发起内置 / 网关工具调用 | `id`、`name`、`input?` |
+| `tool_result` | 内置 / 网关工具调用结果 | `id`、`name?`、`result?`、`error?` |
+| `local_tool_request` | Agent 请求宿主提供本地只读工具结果，宿主须用 `submitLocalToolResult` 回填 | `requestId`、`name`、`input` |
+| `artifact` | 产出文件（图片 / 代码 / 文档等）；用 `downloadArtifact(runId, artifact.id)` 下载 | `artifact: AgentRunArtifact` |
+| `sources` | 网络检索 / RAG 来源信息 | `sources` |
+| `usage` | provider/ADK 透传的 token usage | `usage.exact`、`inputTokens`、`outputTokens`、`totalTokens`、`cacheReadTokens`、`cacheCreateTokens` |
+| `settle` | 服务端结算事件 | `settlement.status`、`tokenRemaining`、`callRemaining`、`exact`、`retryQueued` |
+| `error` | 失败事件（`throwOnError:true` 默认会转 `AgentRunStreamError` 抛出） | `error.code`、`error.message`、`error.stage`、`error.retryable` |
+| `done` | 流终止 | `runId`、`status` |
+
 ## 认证
 
 ### 浏览器内 / 自动 OAuth（推荐）
@@ -153,16 +171,44 @@ const token = await client.ensureToken();      // 拿到当前有效 access toke
 
 ### 手动 OAuth（CLI / 自定义流程）
 
+底层 helper 适用于自管 token 的 CLI / 自定义授权 UI。**大多数场景直接用 `client.login(appName, scopes)` 即可**——它内部封装了下面全部步骤。完整可运行示例见 [`examples/auth-oauth-flow.ts`](./examples/auth-oauth-flow.ts)。
+
 ```ts
-import { discover, register, authorize, exchangeCode } from '@acosmi/sdk-ts';
+import {
+  discover,           // RFC 8414 元数据发现
+  register,           // RFC 7591 动态客户端注册
+  authorize,          // 本地 loopback PKCE（仅 Node）
+  exchangeCode,       // code + verifier → token
+  refreshToken,       // 续期
+  newTokenSet,        // 把 TokenResponse 包成可持久化 TokenSet
+  FileTokenStore,
+  allScopes,
+} from '@acosmi/sdk-ts';
 
 const meta = await discover(process.env.ACOSMI_SERVER_URL!);
-const reg = await register(meta, 'My CLI', allScopes());
-const result = await authorize(meta, reg, allScopes(), {
-  onEvent: (ev) => console.log(ev.type, ev.url),
+const reg = await register(meta, 'My CLI');            // 不接 scopes 参数
+const scopes = allScopes();
+
+// authorize 返回 { result, verifier }，result.code + result.redirectURI 给 exchangeCode
+const { result, verifier } = await authorize(meta, reg.client_id, scopes, {
+  handler: (ev) => {
+    if (ev.type === 'auth_url') console.log('open in browser:', ev.url);
+  },
 });
-const tokens = await exchangeCode(meta, reg, result.code, result.codeVerifier);
+
+const tokenResp = await exchangeCode(
+  meta,
+  reg.client_id,
+  result.code,
+  result.redirectURI,      // 来自 authorize 返回；不是手动构造的 redirect_uri
+  verifier,                 // 来自 authorize 返回；不是 result.* 上的字段
+);
+
+const tokens = newTokenSet(tokenResp, reg.client_id, process.env.ACOSMI_SERVER_URL!);
+await new FileTokenStore('./tokens.json').save(tokens);
 ```
+
+> 浏览器侧（无法启 loopback HTTP server）请改用 v1.4.0+ Web OAuth 原语 `discoverWebOAuthMetadata` + `registerWebOAuthClient` + `createWebAuthorizationRequest` + `completeWebAuthorizationRequest`，由调用方实现 popup / 同窗口 redirect handler，SDK 负责 PKCE / state 校验 / token 兑换。
 
 ### Token 持久化
 
@@ -179,16 +225,20 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 
 | 模块         | 主要方法                                                                             |
 | ------------ | ------------------------------------------------------------------------------------ |
-| **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`                                          |
+| **Client 构造** | `new Client(cfg)`（同步），`Client.create(cfg)`（async；预加载已有 TokenStore）            |
+| **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`, `chatMessages`, `chatMessagesStream`, `buildChatRequest` |
 | **Agent Runs** | `agentRuns.create`, `agentRuns.stream`, `agentRuns.run`, `agentRuns.cancel`, `agentRuns.get`, `agentRuns.listArtifacts`, `agentRuns.downloadArtifact`, `agentRuns.submitLocalToolResult`, `agentRuns.runWithLocalTools` |
-| **Auth**     | `login`, `logout`, `ensureToken`, `forceRefresh`, `discover`, `authorize`, `exchangeCode`, `refreshToken` |
-| **Models**   | `listModels`, `listModelsWithStatus`, `getModelCapabilities`, `getQuotaSummary`, `modelSupportsInputModality`, `modelSupportsImageInput`, `findFirstModelByInputModality`, `findDesktopVisualUnderstandingModel` |
-| **Skills**   | `browseSkills`, `browseSkillsList`, `getSkillDetail`, `resolveSkill`, `installSkill`, `downloadSkill`, `uploadSkill`, `generateSkill`, `optimizeSkill`, `validateSkill` |
+| **Auth — 内置 Loopback OAuth** | `login`, `loginWithHandler`, `logout`, `ensureToken`, `forceRefresh`, `isAuthorized`, `getTokenSet` |
+| **Auth — 手动 OAuth 原语** | `discover`, `discoverWithProfile`, `register`, `authorize`, `exchangeCode`, `refreshToken`, `revokeToken`, `generateState` |
+| **Auth — 浏览器 Web OAuth (v1.4.0+)** | `discoverWebOAuthMetadata`, `registerWebOAuthClient`, `createWebAuthorizationRequest`, `completeWebAuthorizationRequest` |
+| **Models**   | `listModels`, `listModelsWithStatus`, `getModelCapabilities`, `getQuotaSummary`, `ensureModelCached`, `modelSupportsInputModality`, `modelSupportsImageInput`, `findFirstModelByInputModality`, `findDesktopVisualUnderstandingModel` |
+| **Skills**   | `browseSkillStore`, `browseSkills`, `browseSkillsList`, `getSkillDetail`, `getSkillSummary`, `resolveSkill`, `installSkill`, `downloadSkill`, `uploadSkill`, `generateSkill`, `optimizeSkill`, `validateSkill`, `certifySkill`, `getCertificationStatus` |
 | **Tools**    | `listTools`, `getTool`                                                               |
 | **Wallet**   | `getWalletStats`, `getWalletTransactions`                                            |
-| **Entitlements** | `getBalance`, `getBalanceDetail`, `listEntitlements`, `claimMonthlyFree`, `getByModel`, `listBuckets`, `listCoefficients` |
-| **Packages** | `listTokenPackages`, `buyTokenPackage`, `getOrderStatus`, `waitForPayment`           |
-| **Notifications** | `listNotifications`, `getUnreadCount`, `markNotificationRead`, `registerDevice`, `listNotificationPreferences` |
+| **Entitlements** | `getBalance`, `getBalanceDetail`, `listEntitlements`, `listConsumeRecords`, `claimMonthlyFree`, `getByModel`, `listBuckets`, `listCoefficients`, `invalidateCoefficientCache` |
+| **Packages** | `listTokenPackages`, `getTokenPackageDetail`, `buyTokenPackage`, `getOrderStatus`, `listMyOrders`, `waitForPayment` |
+| **Notifications** | `listNotifications`, `getUnreadCount`, `markNotificationRead`, `markAllNotificationsRead`, `deleteNotification`, `registerDevice`, `unregisterDevice`, `listNotificationPreferences`, `updateNotificationPreference` |
+| **Notifications — WebSocket** | `connect`, `disconnect`, `isConnected` (实时推送订阅；浏览器走原生 WebSocket，Node 18-21 需自装 `ws`，Node 22+ 用原生) |
 | **Bug Report** | `submitBugReport`, `getBugReport`                                                  |
 | **Web Search** | `newWebSearchTool` (factory)                                                       |
 | **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
@@ -215,6 +265,39 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 > 这些是为后续平台控制面（`tenant` / `iam` / `operations` / `gateway` 等）与
 > `compliance` 分页 / gate 能力预沉淀的【共享原语】；消费这些类型的命名空间方法
 > 须待对应后端端点就绪后才落地，当前 8 个占位命名空间尚未从根入口导出。
+
+### `sanitize` 命名空间（历史消息清理）
+
+`@acosmi/sdk-ts` 把 `src/sanitize/` 整体以命名空间方式导出（`import { sanitize } from '@acosmi/sdk-ts'`），同时也通过 `@acosmi/sdk-ts/sanitize` 子路径单独导入。Client 与 ChatRequest 的粘合（`Client.prototype.applyRequestSanitizers`）由 `src/core/sanitize-bridge.ts` 通过 declaration merging 自动注入。**默认零开销**——只有显式调用 `client.setDefensiveSanitize(cfg)` 或 `client.setAutoStripEphemeralHistory(true)` 后才走流水线。
+
+| 公开符号 | 形态 | 用途 |
+| --- | --- | --- |
+| `client.setDefensiveSanitize(cfg)` | Client 方法（runtime 注入） | 配置请求前底线防御（`maxMessagesTurns` 历史轮深度、`permanentDenyBlocks` block 类型黑名单、`maxImageBytes` / `maxVideoBytes` / `maxPDFBytes` base64 内联媒体上限）；传 `{}` 关闭 |
+| `client.setAutoStripEphemeralHistory(on)` | Client 方法（runtime 注入） | 开启后每次请求自动从 `rawMessages` 剥除带 `acosmi_ephemeral:true` 标记的 block，并联动剥引用已剥 `tool_use_id` 的 `tool_result` |
+| `client.applyRequestSanitizers(req)` | Client 方法（buildChatRequest 内部自动调用） | 一般无需手动调；自定义 build 链路时可直接复用 |
+| `sanitize.sanitize(messages, cfg)` | 函数 | 对消息历史做白名单过滤 + 深度 / 尺寸校验 + ephemeral 剥离，返回新数组 |
+| `sanitize.dropBlocks(messages, predicate)` | 函数 | 按谓词剔除 content blocks（联动剔除引用同 tool_use_id 的 tool_result） |
+| `sanitize.stripEphemeral(messages)` | 函数 | 剥离 `acosmi_ephemeral:true` 块（端口自 Go `sanitize.StripEphemeral`，bug-for-bug） |
+| `sanitize.MinimalSanitizeConfig` | 类型 | sanitize 配置 |
+| `sanitize.BlockType` / `BlockText` / `BlockImage` / `BlockVideo` / `BlockDocument` / `BlockSearchResult` / `BlockThinking` / `BlockRedactedThinking` / `BlockToolUse` / `BlockToolResult` / `BlockToolReference` / `BlockServerToolUse` / `BlockWebSearchToolResult` / `BlockCodeExecutionToolResult` / `BlockMCPToolUse` / `BlockMCPToolResult` / `BlockContainerUpload` | 类型 + 常量 | 已知 block 类型常量 |
+| `sanitize.HistoryTooDeepError` / `BlockDeniedError` / `SizeError` | 错误 | sanitize 规则不通过时分类抛出（也导出对应单例 `ErrHistoryTooDeep` / `ErrBlockDenied`） |
+
+```ts
+import { Client, sanitize } from '@acosmi/sdk-ts';
+
+const client = new Client({ serverURL });
+
+// 启用底线防御 + 自动剥 ephemeral
+client.setDefensiveSanitize({
+  maxMessagesTurns: 64,
+  // 其他字段按 MinimalSanitizeConfig 形态填充
+});
+client.setAutoStripEphemeralHistory(true);
+
+// 之后 chat / chatStream 走 buildChatRequest 时自动应用 applyRequestSanitizers。
+```
+
+> 红线：**thinking 块在 Anthropic 续轮的"上一轮返回什么、下一轮就必须原样回传"硬约束下走豁免**，禁止从历史中剔除；`tool_use_id` 联动剔除规则参考 `test/sanitize/history.test.ts` 的 P0 红线测试。详细行为见 `src/sanitize/history.ts` + `defensive.ts`。
 
 ### 示例：Skill 商店搜索
 
@@ -246,7 +329,7 @@ const tool = newWebSearchTool({
 
 const resp = await client.chat('claude-opus-4-7', {
   messages: [{ role: 'user', content: '查一下 Web Components 最新规范' }],
-  maxTokens: 2048,
+  max_tokens: 2048,
   tools: [tool],
 });
 ```
@@ -323,13 +406,14 @@ const view = await client.getBugReport(result.feedback_id);
 | 错误类型             | 触发                                                                   |
 | -------------------- | ---------------------------------------------------------------------- |
 | `HTTPError`          | 4xx/5xx，含 `statusCode` / `body` / `type` / `retryAfter`              |
-| `NetworkError`       | TCP/DNS/TLS 失败                                                       |
-| `StreamError`        | SSE 流解析失败                                                         |
+| `NetworkError`       | TCP/DNS/TLS 失败；含 `isTimeout()` / `isEOF()` 便捷判定                  |
+| `StreamError`        | gateway `managed_model_stream_failed` 事件解析（含 `code` / `stage` / `retryable`） |
 | `AgentRunStreamError` | Agent Runs 流返回 `error` 事件（默认抛出；可设 `throwOnError:false` 自行消费） |
 | `BusinessError`      | 网关返回 `code !== 0`，含 `code` (number) / `message` (字符串)         |
 | `RateLimitError`     | 429（含 `retryAfter`）                                                 |
 | `OrderTerminalError` | `waitForPayment` 终态失败                                              |
-| `CompliancePollError` | `waitForTimestampVerified` / `waitForProviderRequestTerminal` 终态失败或超时 |
+| `ModelNotFoundError` | `chat` / `ensureModelCached`：listModels 自动刷新一次后仍未命中目标 modelId（v0.13.x 起替代旧硬返 anthropic 占位的行为，含 `modelId` 字段） |
+| `CompliancePollError` | `waitForTimestampVerified` / `waitForProviderRequestTerminal` 终态失败或超时（含 `kind: 'timeout' | 'terminal_failure' | 'unknown'`） |
 
 ```ts
 import { HTTPError, BusinessError } from '@acosmi/sdk-ts';
@@ -482,6 +566,7 @@ client.compliance.getCapabilities(signal?)                 // 能力闸门列表
 client.compliance.getFeatureGate(action, signal?)          // 单动作能力（便捷，一次网络请求）
 client.compliance.listOperations(req?, signal?)            // 操作投影分页 → PageResult
 client.compliance.getOperation(id, signal?)                // 操作投影详情
+client.compliance.classifyError(err)                       // BusinessError → ComplianceErrorInfo | null（同顶层 classifyComplianceError，便于在 catch 块上链式调用）
 
 client.compliance.listTsaProviders(signal?)                // TSA provider 只读列表
 client.compliance.getTsaStats(signal?)                     // 时间章统计只读视图
@@ -579,7 +664,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 1.5.0 | 当前稳定版 | 沉淀 `src/shared/` 跨域共享 DTO（`PageRequest`/`PageResult` 别名、`OperationId`/`OperationStatus`/`IdempotencyKeyHeader`、`RetryAdvice` 叠加层、`PrincipalRef`/`TenantRef`、`FeatureGateStatus`/`StepUpStatus`/`BillingPreflightResult`）。纯增量；8 个平台控制面占位命名空间仍待后端契约就绪后落地。 |
+| 1.5.1 | 当前稳定版 | **Docs / examples / 源码注释全量复核与修订 — 无 API 变化**。修补 8 项漂移与遗漏：README API 总览补 25+ 漏列方法（Chat 内部方法、Auth 浏览器 Web OAuth 4 原语、Skills/Notifications/Entitlements/Packages 全量、WS `connect/disconnect/isConnected`）；重写 §"手动 OAuth" 段对齐 `auth.ts` 真实签名；§"双格式红线" + 三个 chat 示例 `maxTokens` → snake_case `max_tokens`；错误表补 `ModelNotFoundError`；§Agent Runs 补 13 类 stream event 完整表；新增 §`sanitize` 命名空间小节；`docs/compliance.md` 6 处 `Since v1.6/.../1.10` 统一为 `v1.5.0 (originally planned as ...)`；手册 §7 scope 数 12 → 15 + 新增 S1-S6 rollup 段；`examples/compliance-evidence-timestamp.ts` 补 `ScopeComplianceReportsWrite`（v1.3.2 漂移生产 401 隐患）；`examples/auth-oauth-flow.ts` + `examples/core-chat.ts` 注释对齐当前契约；`src/index.ts` + `src/browser.ts` + `src/auth/auth.ts` 注释从 Go-port 语义改为"TS 主实现 + Web OAuth 替代品"。`typecheck` / `lint` / `vitest`(214) / `build` / `test:pack` 全绿。 |
+| 1.5.0 | 稳定版 | 沉淀 `src/shared/` 跨域共享 DTO（`PageRequest`/`PageResult` 别名、`OperationId`/`OperationStatus`/`IdempotencyKeyHeader`、`RetryAdvice` 叠加层、`PrincipalRef`/`TenantRef`、`FeatureGateStatus`/`StepUpStatus`/`BillingPreflightResult`）。**同时全量 rollup compliance gateway S1-S6** 能力（原 1.6.0-1.11.0 roadmap，见 [CHANGELOG.md](./CHANGELOG.md)）：S1 6 个分页列表、S2 capabilities + operations 投影、S3 TSA 只读视图、S4 envelope 收尾 + void、S5 合同模板全生命周期 + 2 新 scope（`compliance:contract_template:{read,write}`）、S6 用印执行分页（`listSealUses`）。当前 compliance scope 总数 **15** 个（`complianceScopes()` 返回）。纯增量；8 个平台控制面占位命名空间仍待后端契约就绪后落地。 |
 | 1.4.2 | 稳定版 | `src/` 从扁平 36 文件按业务域重组为 per-domain 目录；公共导出符号集合、`exports`、`dist/` 路径一字未变（纯内部重组）。新增 TypeDoc API 文档。 |
 | 1.4.1 | 稳定版 | 新增 `Config.browserRefreshMode` / `refreshProxyURL`——浏览器 Web OAuth token 刷新策略（规避 issuer CORS 403）。 |
 | 1.4.0 | 稳定版 | 新增浏览器 Web OAuth 原语 `discoverWebOAuthMetadata` / `registerWebOAuthClient`（csign `/login` Web OAuth 接入）。 |

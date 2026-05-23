@@ -22,6 +22,7 @@ import {
   ScopeComplianceTimestampIssue,
   ScopeComplianceTimestampVerify,
   ScopeComplianceReportsRead,
+  ScopeComplianceReportsWrite,
 } from '@acosmi/sdk-ts';
 
 // 模拟持久化的 Idempotency-Key 存储；生产环境应落 DB / 本地文件 / 业务订单表。
@@ -51,7 +52,8 @@ async function main() {
     ScopeComplianceEvidenceWrite,
     ScopeComplianceTimestampIssue,
     ScopeComplianceTimestampVerify,
-    ScopeComplianceReportsRead,
+    ScopeComplianceReportsRead,   // getReport / downloadReport
+    ScopeComplianceReportsWrite,  // createReport（v1.3.2 起从 read 切到独立 write scope）
   ]);
 
   // 1) 本地 sha256 (用户业务内容)
