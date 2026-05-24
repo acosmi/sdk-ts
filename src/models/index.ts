@@ -30,3 +30,6 @@ export { extractAnthropicBlockMeta, type BlockMeta } from './stream-meta';
 
 // === Betas ===
 export { buildBetas, uniqueMerge } from './betas';
+
+// === v1.6.0 业务侧终端用户 id helper ===
+export { validateEndUserId, maxEndUserIdLength, isSSECommentLine } from './enduser';

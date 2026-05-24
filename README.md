@@ -7,7 +7,7 @@
 ## 状态
 
 - 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
-- 当前版本：**1.5.1**（文档 / examples / 源码注释全量复核与修订——补 25+ 漏列 API、修 OAuth/Chat 示例签名漂移、`docs/compliance.md` 6 处版本号统一为 1.5.0、`examples/compliance-evidence-timestamp.ts` 补 `compliance:reports:write` scope；无 API / wire-format 变化）。`1.5.0` 沉淀 `src/shared/` 跨域共享 DTO + compliance gateway S1-S6 全量 rollup；`1.4.2` `src/` 按业务域重组；`1.4.x` 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端；详见 [CHANGELOG](./CHANGELOG.md)
+- 当前版本：**1.6.0**（v1.6.0 新增 `ChatRequest.endUserId` 业务侧终端用户 id + SSE keep-alive 注释行自动跳过 + per-request 超时 5min→11min 覆盖上游"开始推理前最长 10min 保活"窗口；详见下方"用户隔离 (v1.6.0+)"+ [CHANGELOG](./CHANGELOG.md)）。`1.5.x` 文档复核 + `src/shared/` 跨域 DTO + compliance gateway S1-S6 rollup；`1.4.x` `src/` 按业务域重组 + 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
 - API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
@@ -29,9 +29,28 @@ await client.login('My App', allScopes());
 const resp = await client.chat('claude-opus-4-7', {
   messages: [{ role: 'user', content: 'Hello' }],
   max_tokens: 1024, // ChatRequest 走 snake_case wire 字段（与上游 Go json tag 对齐）
+  endUserId: 'user-abc-123', // v1.6.0+ 业务侧稳定 id, 启用上游隔离 / KV-cache / 调度策略
 });
 console.log(resp.content);
 ```
+
+### 用户隔离 (v1.6.0+)
+
+`ChatRequest.endUserId` — 业务侧终端用户的稳定标识, **跨 provider 通用语义**, 不绑死 DeepSeek。SDK 自动按 wire-format 注入: OpenAI 顶层 `user_id` / Anthropic `metadata.user_id`; 网关侧校验并派生后送达上游, 命中三项隔离能力 (内容安全 / KV-cache / 调度)。
+
+**约束**: 字符集 `[a-zA-Z0-9_-]+`, 长度 ≤ 512, **禁止包含 PII** (邮箱 / 手机 / 真名等)。可用 `validateEndUserId(s)` helper 自校验。
+
+```ts
+import { validateEndUserId } from '@acosmi/sdk-ts';
+
+const err = validateEndUserId(uid);
+if (err) {
+  // 处理: PII / 长度 / 字符集不合规
+  throw new Error(err);
+}
+```
+
+不传 `endUserId` 时网关从认证身份 HMAC-SHA256 自动派生 32 字符稳定 id, 业务无感知。流式 + 同步 + Anthropic + OpenAI 四条路径均支持。
 
 ## 双格式红线（设计核心）
 

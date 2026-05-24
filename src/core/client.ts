@@ -58,6 +58,7 @@ import {
 } from '../models/adapters/index';
 import { extractAnthropicBlockMeta, type BlockMeta } from '../models/stream-meta';
 import { newOpenAIStreamConverter } from '../models/adapters/openai';
+import { isSSECommentLine } from '../models/enduser';
 import {
   classifyTransport,
   iterSSELines,
@@ -169,6 +170,15 @@ export type BrowserRefreshMode = 'direct' | 'server-proxy' | 'none';
 export const ErrOAuthCORSBlocked = 'oauth_cors_blocked' as const;
 export const ErrRefreshProxyFailed = 'refresh_proxy_failed' as const;
 export const ErrTokenExpired = 'token_expired' as const;
+
+/**
+ * v1.6.0: chat / chatMessages / chatStream / chatMessagesStream 的 per-request 超时上限。
+ *
+ * 上游 (如 DeepSeek) 在开始推理前可能持续保活长达 10 分钟; SDK 必须容纳
+ * "首字节前等待 + 推理 + 流式传输" 全程, 否则会在等待阶段误超时切断。
+ * 单值覆盖, 不区分首字节 vs 总耗时 (AbortController 是总耗时上限)。
+ */
+const CHAT_REQUEST_TIMEOUT_MS = 11 * 60 * 1000;
 
 // =============================================================================
 // 内部 Deferred / WS state
@@ -910,8 +920,8 @@ export class Client {
    */
   async chat(modelID: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
     req.stream = false;
-    // chat 请求可能 30-120s+, 使用 5 分钟超时而非默认 30s
-    const ctl = withRequestTimeout(5 * 60 * 1000, signal);
+    // v1.6.0: 调整为 CHAT_REQUEST_TIMEOUT_MS (11min), 容纳 DeepSeek 等上游"首字节前 10min 保活"窗口。
+    const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
       const { body, adapter } = await this.buildChatRequest(modelID, req, ctl.signal);
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
@@ -973,7 +983,7 @@ export class Client {
     signal?: AbortSignal,
   ): Promise<AnthropicResponse> {
     req.stream = false;
-    const ctl = withRequestTimeout(5 * 60 * 1000, signal);
+    const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
       const caps = this.getCachedCapabilities(modelID) ?? zeroModelCapabilities();
       const body = adapter.buildRequestBody(caps, req);
@@ -1021,7 +1031,7 @@ export class Client {
     signal?: AbortSignal,
   ): Promise<AnthropicResponse> {
     req.stream = false;
-    const ctl = withRequestTimeout(5 * 60 * 1000, signal);
+    const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
       const caps = this.getCachedCapabilities(modelID) ?? zeroModelCapabilities();
       const body = adapter.buildRequestBody(caps, req);
@@ -1130,6 +1140,8 @@ export class Client {
 
     let currentEvent = '';
     for await (const line of iterSSELines(resp.body)) {
+      // v1.6.0: 显式跳过 SSE 注释行 (": comment", 如 ": keep-alive")
+      if (isSSECommentLine(line)) continue;
       if (line.startsWith('event:')) {
         currentEvent = line.slice('event:'.length).trim();
       } else if (line.startsWith('data:')) {
@@ -1210,6 +1222,8 @@ export class Client {
       const converter = newOpenAIStreamConverter();
       let _currentEvent = '';
       for await (const line of iterSSELines(resp.body)) {
+        // v1.6.0: 显式跳过 SSE 注释行
+        if (isSSECommentLine(line)) continue;
         if (line.startsWith('event:')) {
           _currentEvent = line.slice('event:'.length).trim();
         } else if (line.startsWith('data:')) {
@@ -1224,6 +1238,8 @@ export class Client {
       const blockTypeMap = new Map<number, BlockMeta>();
       let currentEvent = '';
       for await (const line of iterSSELines(resp.body)) {
+        // v1.6.0: 显式跳过 SSE 注释行
+        if (isSSECommentLine(line)) continue;
         if (line.startsWith('event:')) {
           currentEvent = line.slice('event:'.length).trim();
         } else if (line.startsWith('data:')) {

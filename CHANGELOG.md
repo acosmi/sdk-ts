@@ -5,7 +5,21 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 2026-05-24
+
+### Added — 业务侧终端用户 id (endUserId) + 请求保活
+
+- `ChatRequest.endUserId?: string` — 业务侧终端用户 id, 跨 provider 通用语义。
+  序列化规则:
+  - OpenAI wire: 顶层 `body["user_id"]`
+  - Anthropic wire: 合并到 `body["metadata"]["user_id"]`; caller `metadata` 显式键优先
+- 约束: 长度 ≤ 512, 字符集 `[a-zA-Z0-9_-]+`, **禁止包含用户隐私信息** (邮箱/手机/真名等).
+- 公开 helper `validateEndUserId(s)`, `isSSECommentLine(line)`, 常量 `maxEndUserIdLength`.
+- Chat / ChatMessages / ChatStream / ChatMessagesStream 的 per-request timeout 5min → **11min**,
+  覆盖 DeepSeek 上游 "开始推理前最大 10min 保活" 窗口。
+- SSE 外层循环显式跳过 `: comment` 注释行 (": keep-alive"), 防止未来添加 else-branch 误抛 JSON parse error。
+- 网关 sanitizer step 4.4 做最终校验 + 派生 + 注入; caller 显式覆盖需 `scope=endusr.set`,
+  无授权时 endUserId 被丢弃, 上游收到的是网关 HMAC 派生值 (32 字符稳定 id)。
 
 ### Security — devDep upgrade（消除 4 项 moderate Dependabot alerts）
 

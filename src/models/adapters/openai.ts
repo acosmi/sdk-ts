@@ -109,6 +109,14 @@ export class OpenAIAdapter implements ProviderAdapter {
       }
     }
 
+    // ── v1.6.0: endUserId → 顶层 body["user_id"] (OpenAI wire 形态) ──
+    // 优先级最高: 在 extraBody 之后写入, 即便 caller 通过 extraBody["user_id"] 自填,
+    // 显式 endUserId 仍胜出 (单一真相, 避免双写歧义)。
+    // 网关 sanitizer 仍会做最终校验与权限决断, 此处仅负责字段位置正确。
+    if (req.endUserId && req.endUserId !== '') {
+      body['user_id'] = req.endUserId;
+    }
+
     // ── 流式选项 ──
     if (req.stream === true) {
       body['stream_options'] = { include_usage: true };

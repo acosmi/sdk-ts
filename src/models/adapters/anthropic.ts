@@ -68,8 +68,20 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
     }
 
-    if (req.metadata) {
-      body['metadata'] = req.metadata;
+    // ── Metadata + v1.6.0 endUserId 合并 ──
+    // caller 显式 metadata 键 (含 user_id) 永远优先, endUserId 仅在 metadata 无 user_id 键时填入。
+    // 不污染 caller 原始对象: 通过浅拷贝构造新 Record, 保留 caller 所有原有键。
+    if (req.metadata || (req.endUserId && req.endUserId !== '')) {
+      const meta: Record<string, unknown> = {};
+      if (req.metadata) {
+        for (const [k, v] of Object.entries(req.metadata)) {
+          meta[k] = v;
+        }
+      }
+      if (req.endUserId && req.endUserId !== '' && meta['user_id'] === undefined) {
+        meta['user_id'] = req.endUserId;
+      }
+      body['metadata'] = meta;
     }
 
     // ── 合入 tools + serverTools ──
