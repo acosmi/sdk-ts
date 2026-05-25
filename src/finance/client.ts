@@ -149,13 +149,13 @@ Client.prototype.uploadCorporateTransferProof = async function (
   proofUrl: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  const qs = new URLSearchParams({ proofUrl });
-  const resp = await this.doJSON<APIResponse<boolean>>(
-    'POST',
-    `/api/distribution/finance/corporate-transfer/${id}/upload-proof?${qs.toString()}`,
-    null,
-    signal,
-  );
+  // P2-017: 后端契约是 @RequestParam("proofUrl"), 走 query (非 body).
+  // URLSearchParams 自动 URI-encode, 但与 path 拼接需注意: path 不可含 '?'.
+  // 改为 encodeURIComponent 直拼, 等价但 0 依赖 URLSearchParams 行为, 更鲁棒.
+  const path =
+    `/api/distribution/finance/corporate-transfer/${encodeURIComponent(String(id))}/upload-proof`
+    + `?proofUrl=${encodeURIComponent(proofUrl)}`;
+  const resp = await this.doJSON<APIResponse<boolean>>('POST', path, null, signal);
   return resp.data ?? false;
 };
 
