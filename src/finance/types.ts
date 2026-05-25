@@ -4,22 +4,40 @@
 // `dist_refund_policy` / `dist_refund_record` / `dist_order_price_snapshot` /
 // `dist_reconciliation` 七表族对齐. 决策 14 (对公转账零银行 API) + 决策 15 (退款规则).
 
-/** 发票视图 (P7). */
+/**
+ * 发票视图 (P7).
+ *
+ * P2-016 PII 分级说明 (与 tk-dist `DistInvoiceDO` `@Sensitive` 注解严格对齐):
+ *  - L0 公开/系统: id / invoiceNo / orderId / enterpriseId / invoiceType / amountFen /
+ *                  taxRate / taxAmountFen / status / issuedAt / pdfUrl
+ *  - L2 登录态半遮: title / contactAddress
+ *  - L3 仅 admin/自己解密读: taxId / bankAccount / contactPhone / bankName
+ *
+ * listMyInvoices() 由后端 VO 视图返脱敏值 ("130********9876" 等), SDK 类型不强制 PII 级
+ * 是因服务端已脱敏; 但 admin 直读 mapper 时该接口仍承载明文 — 调用方 (Web/Desktop) 必须
+ * 自行判定上下文, 不要在公开页直接渲染 L3 字段.
+ */
 export interface Invoice {
   id: number;
-  /** 发票号 (开票后回写). */
+  /** 发票号 (开票后回写). L0. */
   invoiceNo?: string;
   orderId?: number;
-  /** UUID. */
+  /** UUID. L0 (用户对自己可见, admin 跨用户聚合视为 L2). */
   userId?: string;
   enterpriseId?: number;
-  /** NORMAL / VAT_GENERAL / VAT_SPECIAL. */
+  /** NORMAL / VAT_GENERAL / VAT_SPECIAL. L0. */
   invoiceType?: string;
+  /** 抬头. L2. */
   title?: string;
+  /** 税号. L3 — 服务端按上下文脱敏/加密. */
   taxId?: string;
+  /** 开户行. L3. */
   bankName?: string;
+  /** 银行账号. L3 — `@FieldEncrypt` 存储加密. */
   bankAccount?: string;
+  /** 收件地址. L2. */
   contactAddress?: string;
+  /** 联系手机. L3 — `@FieldEncrypt` 存储加密. */
   contactPhone?: string;
   amountFen?: number;
   /** 6% 默认. */
