@@ -5,6 +5,147 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-05-25
+
+### Added — 商品化总规划 P7: 财务 finance namespace (发票/退款/对公转账)
+
+钉死决策 (§13.7):
+- 决策 14 对公转账: 支付页弹窗 + 企业微信对接销售/财务 + 财务系统手工 mark, **零银行 API**.
+- 决策 15 退款规则: 订阅不退 / Token 包 7 天未用全额 / 服务交付后不退, 按 dist_refund_policy 表配置, 不硬编码.
+- R12   价格快照: 订单创建时同步落 dist_order_price_snapshot, 支付回调按快照算 entitlement, 防 in-flight 改价错配.
+
+- 新 namespace `finance/`:
+  - 类型 (`finance/types`):
+    - `Invoice` (普票/增普/增专) + `RequestInvoiceInput`
+    - `RefundPolicy` (5 条 seed: SUBSCRIPTION_NO_REFUND / TOKEN_PACK_7DAY_UNUSED / TOKEN_PACK_PRORATA_USED / COMPLIANCE_NO_REFUND_AFTER_DELIVERY / LEGAL_NO_REFUND_AFTER_DELIVERY)
+    - `RefundRecord` + `RequestRefundInput` (productFamily 派生 policyCode)
+    - `CorporateTransfer` + `InitiateCorporateTransferInput` + `InitiateCorporateTransferResult` (qrUrl/salesWechatId/financeEmail 弹窗数据)
+  - 方法 (与 tk-dist `/api/distribution/finance/**` 对齐):
+    - `client.requestRefund(req)` / `client.listMyRefunds()`
+    - `client.requestInvoice(req)` / `client.listMyInvoices()`
+    - `client.initiateCorporateTransfer(req)` / `client.uploadCorporateTransferProof(id, url)` / `client.listMyCorporateTransfers()`
+
+### Notes
+
+- admin 板块 (审批 / 财务工作台 / 月度对账 / dashboard) 由 admin UI 直连 `/api/admin/finance/**`, 不在 SDK 边界.
+- DistPricingConfigService 新增 3 key 支撑决策 14 弹窗: `corporate_transfer_qr_url` / `corporate_transfer_sales_wechat_id` / `corporate_transfer_finance_email` (ops 热更).
+- V51 SQL: 7 CREATE TABLE (`dist_invoice` / `dist_contract` / `dist_corporate_transfer` / `dist_refund_policy` / `dist_refund_record` / `dist_order_price_snapshot` / `dist_reconciliation`) + 5 INSERT seed policy + 3 INSERT seed pricing config.
+- R12 实施: `OrderPaymentService.createPurchase` 在 `orderMapper.insert(order)` 后同步调 `OrderPriceSnapshotService.captureSnapshot(orderId, productId)`.
+- 月度对账作业 `MonthlyReconciliationJob` 每月 1 号 02:30 跑上月对账, 差异 > 1% → log.error 告警.
+
+## [1.8.1] - 2026-05-25
+
+### Added — 商品化总规划 P6a: 企业席位 enterprise namespace
+
+钉死决策 (§-1.4 H10 + §-1.2.D): tk-dist 新建 `dist_enterprise_*` 独立表族, 与 `dist_org_node` 分销代理体系
+完全分离 (实测分销 dist_org_node 1 条 + dist_org_member 24 条均为代理身份, 不复用). §-1.2.D 钉死 4 项:
+销售对接 ≥200 席 / 月度变更 3 次/订阅 / per_seat_cap = pool/seats×1.5 / pool = seats × Pro Max × 0.8.
+
+- 新 namespace `enterprise/`:
+  - 类型 (`enterprise/types`):
+    - `EnterpriseSummary` (企业组织, contactPhone/Email 仅 OWNER/ADMIN 可见)
+    - `EnterpriseMember` (OWNER / ADMIN / MEMBER 角色, 不参与佣金)
+    - `OrgSubscription` (订阅 + §-1.2.D 4 项派生计算字段)
+    - `OrgSeat` (席位, seat_no 1..N, per_seat_monthly_cap_tk override)
+    - `InviteMemberRequest` / `AssignSeatRequest` / `OrgConsumeReport`
+  - 方法 (与 tk-dist `/api/admin/enterprises/**` + `/me/enterprises` 端点对齐):
+    - `client.listMyEnterprises()` / `client.getEnterprise(id)`
+    - `client.inviteMember(req)` / `client.listEnterpriseMembers(enterpriseId)`
+    - `client.listOrgSubscriptions(enterpriseId)`
+    - `client.listSeats(orgSubscriptionId)` / `client.assignSeat(req)` / `client.revokeSeat(seatId, note?)`
+    - `client.getOrgConsumeReport(enterpriseId)`
+
+### Notes
+
+- 不升 major (与 P5 1.8.0 兼容); admin 9 controllers (Enterprise / Member / Subscription / Seat /
+  SeatAssignment / Settlement / Sales / Billing / RiskControl) 由 admin UI 直连, 不在 SDK 边界.
+- 后端 EntitlementService.hold() 入口已加 P6a enterprise pool fast-path (用户被分配席位 → 走简化
+  SHARED 池扣减; 池满 / 超 per_seat_cap → fallback 个人桶 + Free 兜底, 现有逻辑零侵入).
+- web /org/console 路由占位 skeleton (订阅概览 / 成员管理 / 席位分配 / 用量统计), SDK 接入留 P6b.
+- P6b (变更规则 + console UI 接入) + P6c (AI 初审外包对接) 后续 wave 实施.
+
+## [1.8.0] - 2026-05-25
+
+### Added — 商品化总规划 P5 (方案 B): 法律案件咨询 casehall namespace
+
+钉死决策: Java tk-dist `yudao-module-casehall` 子模块, 与 `yudao-module-compliance` 并列体系
+(不另起架构分裂). Go 网关侧 `legal_* 10 表` 保留供 `legal-wf-*` 工作流运行时使用,
+与本商业化数据流松耦合。
+
+- 新 namespace `casehall/`:
+  - 类型 (`casehall/types`):
+    - `LawyerSummary` (公开 L1 视图, licenseNo 等 PII L3 已脱敏剥离)
+    - `SubmitCaseLeadRequest` / `CaseLead` / `CaseMatter`
+    - `LegalConsultation` / `BookConsultationRequest`
+    - `LegalServiceOrder` / `LegalServiceSku`
+    - `LegalSkuCode` literal union (5 SKU)
+  - 方法 (与 tk-dist `/casehall/app/**` C 端公开 + `/casehall/me/**` 登录态对齐):
+    - `client.listLawyers({ practiceArea?, location?, pageNo?, pageSize? })`
+    - `client.getLawyer(id)`
+    - `client.submitCaseLead(req)` / `client.listMyCaseLeads()` / `client.getMyCases()`
+    - `client.bookConsultation(req)` / `client.listMyConsultations()`
+    - `client.listMyLegalOrders()` / `client.listLegalSKUs(region?)`
+- 5 Legal SKU (复用 `dist_compliance_sku.benefit_type='LEGAL_SERVICE'`, V49 注入):
+  - `LEGAL_CONSULTATION_ONCE` 19900 分
+  - `LEGAL_CONSULTATION_60MIN` 35900 分
+  - `LEGAL_DOC_REVIEW_HUMAN` 49900 分
+  - `LEGAL_CASE_LEAD_CLAIM` 9900 分
+  - `LEGAL_LAWYER_SERVICE_PKG` 199900 分
+
+### Notes
+
+- admin 板块 9 模块 (`/casehall/admin/**`) 不在 SDK 边界, 仅 admin UI 直连。
+- 路由实际生效由后续窗口在 nexus-v4 网关层路由白名单中开放。
+
+## [1.7.0] - 2026-05-25
+
+### Added — 商品化总规划 P4: csign 电子认证 SKU (扩展 pricing namespace)
+
+- 新类型 (`pricing/types`): `ComplianceSku` / `ComplianceQuoteResponse` / `ComplianceBenefitType`
+- 新方法 (匿名可调用):
+  - `client.listComplianceSkus(region?)` → `ComplianceSku[]`
+  - `client.quoteCompliance(skuCode, quantity?, region?)` → `ComplianceQuoteResponse`
+- 端点 (Go 网关反代到 tk-dist `/api/distribution/public/compliance/**`, @PermitAll 匿名):
+  - `/distribution/public/compliance/skus?region=CN|OS|GLOBAL`
+  - `/distribution/public/compliance/quote?skuCode=...&quantity=...&region=...`
+- 字段白名单: 公开端点不暴露 `upstreamCostFen` / `status` / 内部 id
+
+### Added — 商品化总规划 P1: 订阅档位 + 公开业务参数 namespace
+
+- 新 namespace `subscription/`:
+  - 类型: `SubscriptionPlan` / `UserSubscription` / `SubscriptionAudience` / `RolloverPolicy`
+  - 方法: `client.listPlans(audience?)` / `client.listUserSubscriptions()`
+- 新 namespace `pricing/`:
+  - 类型: `PricingConfig` (Record<string,string>) / `PublicModelSummary`
+  - 方法: `client.getPricingConfig(key?)` / `client.listPublicModels()`
+- 端点 (Go 网关反代到 tk-dist `/api/distribution/public/pricing/**`, 网关代理路由 P3 商品中心补):
+  - `/distribution/public/pricing/plans?audience=PERSONAL|ENTERPRISE`
+  - `/distribution/public/pricing/config?key=...`
+  - `/distribution/public/pricing/models`
+  - `/distribution/user/subscriptions`
+
+### Added — 商品化总规划 P3: 商品中心 namespace (同 minor 升级, version 仍 1.7.0)
+
+- 新 namespace `products/`:
+  - 类型: `Product` / `ProductFamily` / `Audience` / `BillingMode` / `RegionScope`
+  - 枚举常量: `ProductFamilyEnum` / `AudienceEnum` / `BillingModeEnum` / `RegionScopeEnum`
+  - 方法: `client.listProductsByFamily(family?, audience?, region?)` / `client.getProductBySlug(slug, region?)`
+- 端点 (Go 网关反代到 tk-dist `/api/distribution/public/products/**`):
+  - `/distribution/public/products/by-family?family=MODEL_MEMBERSHIP&audience=PERSONAL&region=GLOBAL`
+  - `/distribution/public/products/by-slug/{slug}`
+- 字段白名单严格 (与后端 `DistProductMappingService#toPublicResponse` 同源):
+  仅暴露 `id / publicSlug / displayName / productFamily / audience / billingMode / regionScope / basePriceFen / tokenQuota / displayMetadataJson`.
+  `featureGateJson` (H5 能力开关) / `retiredAt` / `salesChannelJson` / `priceSnapshotPolicy` 禁止外泄.
+- 后端 V47 DDL: `dist_product_mapping` 加 9 字段 (`product_family / audience / billing_mode / feature_gate_json / region_scope / sales_channel_json / price_snapshot_policy / display_metadata_json / retired_at`).
+
+### Compatibility — 100% 后向
+
+- 新增三个 barrel namespace (subscription/pricing/products), 现有所有 import 路径不变.
+- 新增方法走 declaration merging 注入 `Client.prototype`, 不破坏既有签名.
+- 缺省 wire 字段策略与 v1.6.x 一致 (snake_case → camelCase 不做映射, 直接吃 Java 返回结构).
+
+---
+
 ## [1.6.0] - 2026-05-24
 
 ### Added — 业务侧终端用户 id (endUserId) + 请求保活

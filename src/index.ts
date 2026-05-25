@@ -22,6 +22,17 @@ export * from './notifications';
 export * from './agent-runs';
 export * from './compliance';
 export * from './support';
+// 商品化总规划 P1 (2026-05-25) — 订阅档位 + 公开业务参数 namespace
+export * from './subscription';
+export * from './pricing';
+// 商品化总规划 P3 (2026-05-25) — 商品中心 namespace
+export * from './products';
+// 商品化总规划 P5 (方案 B 2026-05-25) — 法律案件咨询 namespace
+export * from './casehall';
+// 商品化总规划 P6a (2026-05-25) — 企业席位 namespace
+export * from './enterprise';
+// 商品化总规划 P7 (2026-05-25) — 财务 (发票/退款/对公转账) namespace
+export * from './finance';
 
 // === Sanitize ===
 // sanitize/ 已是独立子包 (有自身 barrel)，命名空间导出留在根级，不经域 barrel 路由。
