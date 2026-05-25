@@ -10,3 +10,6 @@ coverage/
 *.tsbuildinfo
 .turbo/
 .cache/
+
+# pnpm-lock not used (npm canonical) — see 隐-15
+pnpm-lock.yaml
