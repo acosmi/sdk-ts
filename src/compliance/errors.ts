@@ -10,6 +10,37 @@
 //       * retryable: 仅对幂等的网络/资源短暂错误为 true（当前默认全为 false，因为
 //         compliance 写接口严禁自动重发）。
 //       * terminal: 不需要 SDK 再次轮询；用户必须用新 idempotency-key 重新发起。
+//
+// =============================================================================
+// v1.9.0+ admin 写端点行为变更 (主仓 K10AdminController IMPL-E + IMPL-F)
+// =============================================================================
+//
+// 主仓 csign / compliance-billing admin 写端点 (POST `/api/admin/csign/seals` /
+// `/api/distribution/compliance-billing/commit|cancel|refund` 等) 在 v1.9.0+ 改用
+// 标准 HTTP 状态码语义, 不再统一返 `200 + CommonResult{ok:false, code:N}`:
+//
+//   - 跨租户访问别人的资源 → `HTTPError statusCode=403` (FORBIDDEN)
+//   - 资源不存在 / 已删除      → `HTTPError statusCode=404` (NOT_FOUND)
+//   - 印章/能力未配置        → `HTTPError statusCode=501` (NOT_IMPLEMENTED, 主仓
+//                              `GlobalErrorCodeConstants.NOT_IMPLEMENTED`, 旧
+//                              `NOT_CONFIGURED_CODE` 别名指向同一码)
+//   - 业务校验失败          → `HTTPError statusCode=400` + CommonResult.error code/message
+//
+// 这些是通用 HTTP 状态码契约, 不属于 compliance 1-031-xxx-xxx 业务段位, 故本文件
+// 不引入新数值码. 集成方应对:
+//
+//   try {
+//     await client.compliance.someAdminWriteMethod(...);
+//   } catch (e) {
+//     if (e instanceof HTTPError) {
+//       if (e.statusCode === 403) /* 跨租户 */;
+//       if (e.statusCode === 404) /* 资源不存在 */;
+//       if (e.statusCode === 501) /* 印章未配置 */;
+//     }
+//   }
+//
+// 不再读 `CommonResult.ok` 字段判定 admin 写端点成功 — v1.9.0+ HTTP 状态码即真相,
+// 4xx/5xx 必抛 HTTPError, 不再 `200 + {ok:false}` 静默失败.
 
 import type { BusinessError } from '../shared/errors';
 

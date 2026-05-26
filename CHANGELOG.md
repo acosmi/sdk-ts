@@ -5,6 +5,49 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-05-25 — Packaging fix
+
+### Fixed
+
+- `package.json` `files` 字段白名单遗漏 — v2.0.0 publish 后发现 `docs/pii-role-matrix.md` (新建) 与 `docs/开发与发布手册.md` (修订) 未进 npm 包. 集成方 `npm install @acosmi/sdk-ts` 后 `node_modules/@acosmi/sdk-ts/docs/` 缺这两份关键文档. 修白名单加显式三份 `docs/*.md` (排除 `docs/api/` 1.7MB TypeDoc 输出避免包膨胀).
+
+## [2.0.0] - 2026-05-25 — BREAKING (Phase 3 复核 + 全量根治)
+
+商品化 P1-P7 Phase 3 深度复核审计 (主仓 9 commit, HEAD `e510f68a`) + SDK 全量同步.
+**用户裁决: major bump** (角色 fail-OPEN 别名废除 + admin 错误码契约变更 + PII 真加密 = breaking).
+
+### Added (Phase C — 主仓 user-facing 端点同步)
+
+- `casehall.getMyLawyerCredentialStatus()` — 律师自查执业证审核状态. 端点 `GET /api/casehall/lawyer-credentials/my` (主仓 `LawyerCredentialConsumerController`). 普通用户调返 `[]` 不抛.
+- `enterprise.getMyEnterpriseKycStatus()` — 企业 OWNER 自查 KYC 状态. 端点 `GET /api/distribution/enterprise/kyc/my` (主仓 `EnterpriseKycConsumerController`). 非 OWNER 调返 `{enterpriseId:undefined}` 空 view, 不抛.
+- 新增类型 `LawyerCredentialMyView` (`src/casehall/types.ts`) + `EnterpriseKycMyStatusView` (`src/enterprise/types.ts`), 与主仓 VO 字段对齐, 显式白名单剔除 `fields_json` / `rawJson` 等 PII L3 字段.
+
+### Changed (BREAKING — Phase 3 复核引入的契约变更)
+
+- **admin 写端点响应改 HTTP 状态码语义**: csign / compliance-billing admin POST 端点
+  (`/api/admin/csign/seals` / `/api/distribution/compliance-billing/commit|cancel|refund` 等)
+  跨租户/不存在改返 HTTP `403`/`404` (之前 `200` + `{ok:false}`); 印章/能力未配置返 HTTP `501`
+  (之前 `200` + `{code:NOT_CONFIGURED}`). 集成方需用 `try-catch` 拦 `HTTPError.statusCode`,
+  不再读 `CommonResult.ok` 字段. 详见 `src/compliance/errors.ts` 头部注释段.
+- **角色严格化**: `ROLE_ADMIN` / `ROLE_USER` / `INTERNAL` 三个旧别名失效 (主仓
+  `SensitiveSerializer.normalizeAuthority` 不再自动升级到 `platform_admin` / `consumer` / `s2s`
+  视角). yudao 后台通用 admin token 调用 PII 端点会拿到 guest 脱敏视图. 集成方需用正式
+  `ROLE_PLATFORM_ADMIN` / `ROLE_S2S` / `ROLE_LAWYER` / `ROLE_CONSUMER` 之一. 详见
+  `docs/pii-role-matrix.md`.
+
+### Docs
+
+- 新建 `docs/pii-role-matrix.md` — 4 角色 × 3 PII 级矩阵 + 旧别名 breaking 说明 + 脱敏算法
+  引用 + 集成方测试 mock 示例.
+- `src/finance/types.ts` `Invoice` JSDoc 升级 P2-016 注释 — 补充 v1.9.0+ 真落盘加密
+  (V51 + V63 + V64), keyVersion v1/v2 payload 协议, 角色严格化 4 正式角色枚举.
+- `src/compliance/errors.ts` 头部注释新增"v1.9.0+ admin 写端点行为变更"段 — 解释 403/404/501
+  HTTP 状态码契约改造与集成方应对.
+- `README.md` 状态行版本号 1.6.0 → 1.9.0, 概要补 v1.7/v1.8/v1.9 highlight.
+- `docs/开发与发布手册.md` 最后更新 2026-05-22 → 2026-05-25, 当前版本 1.5.0 → 1.9.0,
+  §4 目录结构补 6 个 namespace (casehall / enterprise / finance / pricing / products /
+  subscription).
+
 ## [1.9.0] - 2026-05-25
 
 ### Added — 商品化总规划 P7: 财务 finance namespace (发票/退款/对公转账)
