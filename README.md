@@ -6,11 +6,33 @@
 
 ## 状态
 
-- 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
-- 当前版本：**2.0.0**（Phase 3 复核 + 全量根治 BREAKING 升级，2026-05-25）。**Phase 3 复核**: 主仓 9 commit 闭环 20 P0 (RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约). **SDK 同步**: 新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师/企业 OWNER 自查端点; `finance/types.ts` P2-016 PII 注释升级 (含 keyVersion v1/v2 payload 协议); 新建 `docs/pii-role-matrix.md` (4 角色 × 3 PII 级矩阵); admin 写端点错误码改 HTTP 状态码语义 (`200+{ok:false}` → `403/404/501`). **v1.x 历史**: 1.9.0 finance / 1.8.1 enterprise / 1.8.0 casehall / 1.7.0 csign+pricing / 1.6.0 endUserId+11min 保活. 详见 [CHANGELOG](./CHANGELOG.md).
-- 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
-- API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
-- 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
+- **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
+- **当前版本：`2.0.1`**（packaging fix — `package.json.files` 数组补齐 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md`，2026-05-25）。
+- **v2.0.0 BREAKING（Phase 3 复核 + 全量根治，2026-05-25）摘要**：
+  - SDK 同步主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。
+  - 新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师 / 企业 OWNER 自查端点（纯增量）。
+  - `finance/types.ts` P2-016 PII Javadoc 升级（含 `keyVersion` v1/v2 payload 协议 + 4 角色 × 3 PII 级矩阵）。
+  - 新建 `docs/pii-role-matrix.md`（4 角色：`platform_admin` / `s2s` / `lawyer` / `consumer`）。
+  - admin 写端点错误码改 HTTP 状态码语义（`200+{ok:false}` → `403/404/501`），上游契约整流。
+  - **升级路径详见下方 "v2.0.0 升级指引"**。
+- **v1.x 历史链**：1.9.0 finance / 1.8.1 enterprise / 1.8.0 casehall / 1.7.0 csign+pricing+products+subscription / 1.6.0 endUserId+11min 保活 / 1.5.x 跨域共享 DTO + Compliance S1-S6 rollup / 1.4.x 浏览器 Web OAuth / 1.3.x compliance SDK / 1.2.x InputModality / 1.1.x agentRuns / 1.0.x 包发布修复。详见 [CHANGELOG](./CHANGELOG.md)。
+- **测试**：发布前需通过 `typecheck` / `lint` / `vitest` / `build` / `test:pack`（packed-tarball consumer smoke）。
+- **API 参考文档**：`npm run docs`（TypeDoc）生成到 `docs/api/`。
+- **包链接**：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)。
+
+### v2.0.0 升级指引
+
+v2.0.0 标 BREAKING，但 **TS SDK 公开类型与方法签名零移除、零改名**；BREAKING 范围在网关后端，集成方按以下清单核对：
+
+| 受影响场景 | 集成方动作 | 关联 |
+|------------|----------|------|
+| 持有 `ROLE_ADMIN` 角色（不是 `platform_admin`）想读 PII L3 字段（如发票税号、律师执照号） | **必须 review** — 网关 `SensitiveSerializer` 不再把 `ROLE_ADMIN` 当 `platform_admin` 别名 fail-OPEN，统一收敛为 4 角色严格白名单。仍需 PII L3 read 的角色须重新申请 `platform_admin` | `docs/pii-role-matrix.md` |
+| 持有 admin 写端点 (`/admin/**/...`) 旧契约 — 期望 `200+{ok:false,code:xxx}` 业务错误码 | **必须改** — 改读 HTTP 状态码：`403` 鉴权不足 / `404` 资源不存在 / `501` `NOT_CONFIGURED_CODE` 网关未配置 provider；body 不再保证带业务码 | 主仓 `K10AdminController` |
+| 用 `client.casehall.*` / `client.enterprise.*` 调律师 / 企业 OWNER 资质相关接口 | **零改动** — 新增 `getMyLawyerCredentialStatus()` / `getMyEnterpriseKycStatus()` 是纯增量，不影响既有方法 | `src/casehall/client.ts`、`src/enterprise/client.ts` |
+| 读 `Invoice.taxNumber` / `Invoice.bankAccount` 等 PII 字段 | **零代码改动** — 字段名 / wire-format 不变，仅 Javadoc 标注从"脱敏"升级为"keyVersion v1/v2 真加密 + AAD field binding"，运行时 transparent | `src/finance/types.ts` |
+| 集成 v1.x 时按"`ROLE_ADMIN` 自动当 `platform_admin`"测试用例 | **必须改** — 删掉别名假设；测试角色显式写 `platform_admin` / `s2s` / `lawyer` / `consumer` 之一 | `docs/pii-role-matrix.md` §角色映射表 |
+
+> v2.0.0 → v2.0.1 是纯 packaging fix（`package.json.files` 数组补 2 个 docs），无源码改动；从 v2.0.0 升 v2.0.1 不需要任何 review。
 
 ## 安装
 
@@ -260,7 +282,17 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Notifications — WebSocket** | `connect`, `disconnect`, `isConnected` (实时推送订阅；浏览器走原生 WebSocket，Node 18-21 需自装 `ws`，Node 22+ 用原生) |
 | **Bug Report** | `submitBugReport`, `getBugReport`                                                  |
 | **Web Search** | `newWebSearchTool` (factory)                                                       |
-| **Compliance** | `compliance.createEvidenceAsset`, `compliance.issueTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage`, `compliance.createReport`, `compliance.downloadReport`, `compliance.createSigningEnvelope`, `compliance.signEnvelope`, `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal` |
+| **Subscription**（v1.7.0+） | `listPlans`, `listUserSubscriptions`                                       |
+| **Pricing**（v1.7.0+） | `getPricingConfig`, `quoteCompliance`                                            |
+| **Products**（v1.7.0+） | `getProductBySlug`, `listProductsByFamily`, `listComplianceSkus`, `listPublicModels` |
+| **Casehall — 法律案件**（v1.8.0+） | `listLawyers`, `getLawyer`, `submitCaseLead`, `listMyCaseLeads`, `getMyCases`, `bookConsultation`, `listMyConsultations`, `listMyLegalOrders`, `listLegalSKUs`, `getMyLawyerCredentialStatus`（v2.0.0+） |
+| **Enterprise — 企业席位**（v1.8.1+） | `listMyEnterprises`, `getEnterprise`, `inviteMember`, `listEnterpriseMembers`, `listOrgSubscriptions`, `listSeats`, `assignSeat`, `revokeSeat`, `getOrgConsumeReport`, `getMyEnterpriseKycStatus`（v2.0.0+） |
+| **Finance — 财务**（v1.9.0+） | `listMyInvoices`, `requestInvoice`, `listMyRefunds`, `requestRefund`, `listMyCorporateTransfers`, `initiateCorporateTransfer`, `uploadCorporateTransferProof` |
+| **Compliance — 证据 / 章戳 / 公开验真** | `compliance.createEvidenceAsset`, `compliance.getEvidenceAsset`, `compliance.verifyEvidencePublic`（匿名公开验真，v1.3.2+）, `compliance.issueTimestamp`, `compliance.issueTimestampForAsset`, `compliance.getTimestamp`, `compliance.verifyTimestamp`, `compliance.waitForTimestampVerified`, `compliance.buildEvidencePackage` |
+| **Compliance — 报告** | `compliance.createReport`（写，带 `Idempotency-Key`）, `compliance.getReport`, `compliance.publishReport`（step-up + 写）, `compliance.downloadReport` |
+| **Compliance — 签署 envelope** | `compliance.createSigningEnvelope`（写）, `compliance.getSigningEnvelope`, `compliance.signEnvelope`（step-up + gate + 写）, `compliance.createH5SigningUrl`（step-up + gate + 写）, `compliance.syncSigningEnvelopeStatus`（写） |
+| **Compliance — 用印审批** | `compliance.submitSealApproval`（写）, `compliance.approveSealApproval`（step-up + 写）, `compliance.rejectSealApproval`（写）, `compliance.cancelSealApproval`（写）, `compliance.listPendingSealApprovals`, `compliance.getSealApproval` |
+| **Compliance — Provider Request** | `compliance.getProviderRequest`, `compliance.waitForProviderRequestTerminal`, `compliance.classifyError` |
 | **Compliance — 分页列表** | `compliance.listEvidenceAssets`, `compliance.listTimestamps`, `compliance.listEvidencePackages`, `compliance.listReports`, `compliance.listSigningEnvelopes`, `compliance.listSealApprovals`, `compliance.listSealUses`（均返回 `PageResult<T>`） |
 | **Compliance — 能力与操作投影** | `compliance.getCapabilities`, `compliance.getFeatureGate`, `compliance.listOperations`, `compliance.getOperation` |
 | **Compliance — TSA 只读视图** | `compliance.listTsaProviders`, `compliance.getTsaStats` |
@@ -537,68 +569,103 @@ PII / 合同原文 / storage bucket+key / subject snapshot / provider raw / TSA 
 
 ### 完整 API 列表
 
+标注约定：
+- `// 写` — POST / PUT / DELETE 写操作，**必传 `Idempotency-Key`**（即第二参数 `options?: ComplianceWriteOptions` 的 `idempotencyKey` 字段）；写操作不自动 retry，401 不 refresh + replay
+- `// step-up` — 需 OAuth token 升级等级；失败抛 `BusinessError` 含 code `1031000013`，调用方按 `classifyComplianceError` 分支引导用户重新 introspection
+- `// gate` — 受 capability gate 控制，未闭合时 fail-closed；先用 `getCapabilities` / `getFeatureGate` 探测
+- `// 分页` — 走 `GET .../page` 返回 `PageResult<T>`（`{ total, list }`）
+- 无标注 — GET 读路径，单次 401 refresh 重试
+
+#### 证据资产（evidence）
+
 ```ts
-client.compliance.createEvidenceAsset(req, options?)
+client.compliance.createEvidenceAsset(req, options?)        // 写
 client.compliance.getEvidenceAsset(id, signal?)
-client.compliance.verifyEvidencePublic(req, signal?)
-client.compliance.listEvidenceAssets(req?, signal?)        // 分页 → PageResult
-client.compliance.listEvidencePackages(req?, signal?)      // 分页 → PageResult
+client.compliance.verifyEvidencePublic(req, signal?)        // 匿名公开验真（未 login 不抛 not-authorized）
+client.compliance.listEvidenceAssets(req?, signal?)         // 分页
+client.compliance.listEvidencePackages(req?, signal?)       // 分页
+client.compliance.buildEvidencePackage(assetId, timestampTokenId?, options?)  // 写
+```
 
-client.compliance.issueTimestamp(req, options?)
-client.compliance.issueTimestampForAsset(assetId, options?)
+#### 时间章（timestamp）
+
+```ts
+client.compliance.issueTimestamp(req, options?)                       // 写
+client.compliance.issueTimestampForAsset(assetId, options?)           // 写
 client.compliance.getTimestamp(id, signal?)
-client.compliance.verifyTimestamp(req, options?)
+client.compliance.verifyTimestamp(req, options?)                      // 写（远端 verify 落审计）
 client.compliance.waitForTimestampVerified(id, opts?)
-client.compliance.listTimestamps(req?, signal?)            // 分页 → PageResult
+client.compliance.listTimestamps(req?, signal?)                       // 分页
+client.compliance.listTsaProviders(signal?)                           // TSA provider 只读列表
+client.compliance.getTsaStats(signal?)                                // 时间章统计只读视图
+```
 
-client.compliance.buildEvidencePackage(assetId, timestampTokenId?, options?)
+#### 出证报告（report）
 
-client.compliance.createReport(req, options?)    // 需 compliance:reports:write
+```ts
+client.compliance.createReport(req, options?)               // 写，需 compliance:reports:write
 client.compliance.getReport(id, signal?)
-client.compliance.publishReport(id, options?)    // step-up
-client.compliance.downloadReport(id, signal?)    // 离线复核 hash 视图
-client.compliance.listReports(req?, signal?)               // 分页 → PageResult
+client.compliance.publishReport(id, options?)               // 写 + step-up
+client.compliance.downloadReport(id, signal?)               // 离线复核 hash 视图
+client.compliance.listReports(req?, signal?)                // 分页
+```
 
-client.compliance.createSigningEnvelope(req, options?)
+#### 签署 envelope
+
+```ts
+client.compliance.createSigningEnvelope(req, options?)                 // 写
 client.compliance.getSigningEnvelope(envelopeId, signal?)
-client.compliance.signEnvelope(envelopeId, req, options?)            // step-up + gate
-client.compliance.createH5SigningUrl(envelopeId, req, options?)      // step-up + gate
-client.compliance.syncSigningEnvelopeStatus(envelopeId, options?)
-client.compliance.listSigningEnvelopes(req?, signal?)      // 分页 → PageResult
-client.compliance.listEnvelopeContracts(envelopeId, signal?)         // 合同列表（数组）
-client.compliance.listEnvelopeProviderRequests(envelopeId, signal?)  // provider 请求列表（数组）
-client.compliance.voidEnvelope(envelopeId, req, options?)            // 作废 envelope（写）
+client.compliance.signEnvelope(envelopeId, req, options?)              // 写 + step-up + gate
+client.compliance.createH5SigningUrl(envelopeId, req, options?)        // 写 + step-up + gate
+client.compliance.syncSigningEnvelopeStatus(envelopeId, options?)      // 写
+client.compliance.listSigningEnvelopes(req?, signal?)                  // 分页
+client.compliance.listEnvelopeContracts(envelopeId, signal?)           // 合同列表（数组，非 PageResult）
+client.compliance.listEnvelopeProviderRequests(envelopeId, signal?)    // provider 请求列表（数组，非 PageResult）
+client.compliance.voidEnvelope(envelopeId, req, options?)              // 写
+```
 
-client.compliance.submitSealApproval(req, options?)
-client.compliance.approveSealApproval(id, query, options?) // step-up
-client.compliance.rejectSealApproval(id, query, options?)
-client.compliance.cancelSealApproval(id, query, options?)
+#### 用印审批（seal approval / seal use）
+
+```ts
+client.compliance.submitSealApproval(req, options?)         // 写
+client.compliance.approveSealApproval(id, query, options?)  // 写 + step-up
+client.compliance.rejectSealApproval(id, query, options?)   // 写
+client.compliance.cancelSealApproval(id, query, options?)   // 写
 client.compliance.listPendingSealApprovals(signal?)
 client.compliance.getSealApproval(id, signal?)
-client.compliance.listSealApprovals(req?, signal?)         // 分页 → PageResult
-client.compliance.listSealUses(req?, signal?)              // 用印执行分页 → PageResult
+client.compliance.listSealApprovals(req?, signal?)          // 分页
+client.compliance.listSealUses(req?, signal?)               // 分页（用印执行）
+```
 
+#### Provider request 状态轮询
+
+```ts
 client.compliance.getProviderRequest(id, signal?)
 client.compliance.waitForProviderRequestTerminal(id, opts?)
+```
 
-client.compliance.getCapabilities(signal?)                 // 能力闸门列表
-client.compliance.getFeatureGate(action, signal?)          // 单动作能力（便捷，一次网络请求）
-client.compliance.listOperations(req?, signal?)            // 操作投影分页 → PageResult
-client.compliance.getOperation(id, signal?)                // 操作投影详情
-client.compliance.classifyError(err)                       // BusinessError → ComplianceErrorInfo | null（同顶层 classifyComplianceError，便于在 catch 块上链式调用）
+#### 能力闸门 / 操作投影
 
-client.compliance.listTsaProviders(signal?)                // TSA provider 只读列表
-client.compliance.getTsaStats(signal?)                     // 时间章统计只读视图
+```ts
+client.compliance.getCapabilities(signal?)                  // 能力闸门列表（拿不到必须 fail-closed）
+client.compliance.getFeatureGate(action, signal?)           // 单动作能力（便捷，一次网络请求）
+client.compliance.listOperations(req?, signal?)             // 分页（操作投影）
+client.compliance.getOperation(id, signal?)
+client.compliance.classifyError(err)                        // BusinessError → ComplianceErrorInfo | null（同顶层 classifyComplianceError，便于 catch 块链式调用）
+```
 
-client.compliance.createContractTemplate(req, options?)              // 创建合同模板（DRAFT）
-client.compliance.updateContractTemplate(id, req, options?)          // 更新模板（仅 DRAFT）
-client.compliance.deleteContractTemplate(id, options?)               // 删除模板（仅 DRAFT）
-client.compliance.getContractTemplate(id, signal?)                   // 模板详情
-client.compliance.listContractTemplates(req?, signal?)               // 模板分页 → PageResult
-client.compliance.uploadContractTemplatePdf(id, req, options?)       // 上传 PDF（base64）
-client.compliance.publishContractTemplate(id, options?)              // DRAFT → PUBLISHED
-client.compliance.archiveContractTemplate(id, options?)              // PUBLISHED → ARCHIVED
-client.compliance.listContractTemplateVersions(id, signal?)          // 版本快照列表（数组）
+#### 合同模板（contract template，v1.5.0 S5）
+
+```ts
+client.compliance.createContractTemplate(req, options?)               // 写，DRAFT
+client.compliance.updateContractTemplate(id, req, options?)           // 写（仅 DRAFT）
+client.compliance.deleteContractTemplate(id, options?)                // 写（仅 DRAFT）
+client.compliance.getContractTemplate(id, signal?)                    // 模板详情
+client.compliance.listContractTemplates(req?, signal?)                // 分页
+client.compliance.uploadContractTemplatePdf(id, req, options?)        // 写（上传 PDF base64）
+client.compliance.publishContractTemplate(id, options?)               // 写，DRAFT → PUBLISHED
+client.compliance.archiveContractTemplate(id, options?)               // 写，PUBLISHED → ARCHIVED
+client.compliance.listContractTemplateVersions(id, signal?)           // 版本快照列表（数组）
 ```
 
 > 6 个 `list*` 分页方法（compliance gateway S1）均走 `GET .../page`，返回
@@ -683,7 +750,14 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 1.5.1 | 当前稳定版 | **Docs / examples / 源码注释全量复核与修订 — 无 API 变化**。修补 8 项漂移与遗漏：README API 总览补 25+ 漏列方法（Chat 内部方法、Auth 浏览器 Web OAuth 4 原语、Skills/Notifications/Entitlements/Packages 全量、WS `connect/disconnect/isConnected`）；重写 §"手动 OAuth" 段对齐 `auth.ts` 真实签名；§"双格式红线" + 三个 chat 示例 `maxTokens` → snake_case `max_tokens`；错误表补 `ModelNotFoundError`；§Agent Runs 补 13 类 stream event 完整表；新增 §`sanitize` 命名空间小节；`docs/compliance.md` 6 处 `Since v1.6/.../1.10` 统一为 `v1.5.0 (originally planned as ...)`；手册 §7 scope 数 12 → 15 + 新增 S1-S6 rollup 段；`examples/compliance-evidence-timestamp.ts` 补 `ScopeComplianceReportsWrite`（v1.3.2 漂移生产 401 隐患）；`examples/auth-oauth-flow.ts` + `examples/core-chat.ts` 注释对齐当前契约；`src/index.ts` + `src/browser.ts` + `src/auth/auth.ts` 注释从 Go-port 语义改为"TS 主实现 + Web OAuth 替代品"。`typecheck` / `lint` / `vitest`(214) / `build` / `test:pack` 全绿。 |
+| 2.0.1 | **当前稳定版** | **Packaging fix — 纯发布元数据，无源码改动**。`package.json.files` 数组补 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md` 两项，让 v2.0.0 引入的 PII 角色矩阵与开发手册随 npm tarball 一并下发。从 v2.0.0 升级到 v2.0.1 无需任何 review。 |
+| 2.0.0 | **BREAKING** | **Phase 3 复核 + 全量根治（2026-05-25）**。主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。**SDK 同步**：新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师/企业 OWNER 自查端点；`finance/types.ts` P2-016 PII Javadoc 升级（含 `keyVersion` v1/v2 payload 协议）；新建 `docs/pii-role-matrix.md`（4 角色 × 3 PII 级矩阵）；admin 写端点错误码改 HTTP 状态码语义（`200+{ok:false}` → `403/404/501`）。**升级指引详见 §"v2.0.0 升级指引"**。SDK 公开类型 / 方法签名零移除、零改名；BREAKING 范围在网关后端契约。 |
+| 1.9.0 | 稳定版 | **finance 域落地（商品化总规划 P7）**。新增 `client.finance.*`：`listMyInvoices` / `requestInvoice` / `listMyRefunds` / `requestRefund` / `listMyCorporateTransfers` / `initiateCorporateTransfer` / `uploadCorporateTransferProof`（决策 14/15 + R12）。发票 / 退款 / 对公转账三条业务线全量接入；金额一律用 string（json.Number 端口，避免 JS 浮点损失）。 |
+| 1.8.1 | 稳定版 | **enterprise 企业席位域落地（商品化总规划 P6a）**。新增 `client.enterprise.*`：`listMyEnterprises` / `getEnterprise` / `inviteMember` / `listEnterpriseMembers` / `listOrgSubscriptions` / `listSeats` / `assignSeat` / `revokeSeat` / `getOrgConsumeReport`。OWNER/ADMIN 权限下席位月度变更 ≤ 3 次（超出返 41xxx 业务码）；订阅 + 席位 + 用量报表三视图齐备。 |
+| 1.8.0 | 稳定版 | **casehall 法律案件咨询域落地（商品化总规划 P5 方案 B）**。新增 `client.casehall.*`：`listLawyers` / `getLawyer` / `submitCaseLead` / `listMyCaseLeads` / `getMyCases` / `bookConsultation` / `listMyConsultations` / `listMyLegalOrders` / `listLegalSKUs`。律师库公开端点（VERIFIED + ACTIVE，PII L3 已脱敏）+ 案件线索 + 咨询 + 5 LEGAL_SERVICE SKU；admin 板块 9 模块不在 SDK 边界。 |
+| 1.7.0 | 稳定版 | **subscription + pricing + products 三域落地（商品化总规划 P1-P4）**。`subscription`：`listPlans` / `listUserSubscriptions`（订阅档位 + 用户订阅）。`pricing`：`getPricingConfig` / `quoteCompliance`（公开业务参数 + csign 合规 SKU 报价）。`products`：`getProductBySlug` / `listProductsByFamily` / `listComplianceSkus` / `listPublicModels`（商品中心 productFamily / audience / billingMode 索引）。 |
+| 1.6.0 | 稳定版 | `ChatRequest.endUserId` 业务侧终端用户稳定标识，跨 provider 通用语义；SDK 自动按 wire-format 注入（OpenAI 顶层 `user_id` / Anthropic `metadata.user_id`）；不传时网关从认证身份 HMAC-SHA256 自动派生 32 字符 id。`validateEndUserId(s)` helper 校验 PII / 长度 / 字符集。SSE keep-alive + 11 分钟超时调优；网关侧命中三项隔离能力（内容安全 / KV-cache / 调度）。 |
+| 1.5.1 | 历史稳定版 | **Docs / examples / 源码注释全量复核与修订 — 无 API 变化**。修补 8 项漂移与遗漏：README API 总览补 25+ 漏列方法（Chat 内部方法、Auth 浏览器 Web OAuth 4 原语、Skills/Notifications/Entitlements/Packages 全量、WS `connect/disconnect/isConnected`）；重写 §"手动 OAuth" 段对齐 `auth.ts` 真实签名；§"双格式红线" + 三个 chat 示例 `maxTokens` → snake_case `max_tokens`；错误表补 `ModelNotFoundError`；§Agent Runs 补 13 类 stream event 完整表；新增 §`sanitize` 命名空间小节；`docs/compliance.md` 6 处 `Since v1.6/.../1.10` 统一为 `v1.5.0 (originally planned as ...)`；手册 §7 scope 数 12 → 15 + 新增 S1-S6 rollup 段；`examples/compliance-evidence-timestamp.ts` 补 `ScopeComplianceReportsWrite`（v1.3.2 漂移生产 401 隐患）；`examples/auth-oauth-flow.ts` + `examples/core-chat.ts` 注释对齐当前契约；`src/index.ts` + `src/browser.ts` + `src/auth/auth.ts` 注释从 Go-port 语义改为"TS 主实现 + Web OAuth 替代品"。`typecheck` / `lint` / `vitest`(214) / `build` / `test:pack` 全绿。 |
 | 1.5.0 | 稳定版 | 沉淀 `src/shared/` 跨域共享 DTO（`PageRequest`/`PageResult` 别名、`OperationId`/`OperationStatus`/`IdempotencyKeyHeader`、`RetryAdvice` 叠加层、`PrincipalRef`/`TenantRef`、`FeatureGateStatus`/`StepUpStatus`/`BillingPreflightResult`）。**同时全量 rollup compliance gateway S1-S6** 能力（原 1.6.0-1.11.0 roadmap，见 [CHANGELOG.md](./CHANGELOG.md)）：S1 6 个分页列表、S2 capabilities + operations 投影、S3 TSA 只读视图、S4 envelope 收尾 + void、S5 合同模板全生命周期 + 2 新 scope（`compliance:contract_template:{read,write}`）、S6 用印执行分页（`listSealUses`）。当前 compliance scope 总数 **15** 个（`complianceScopes()` 返回）。纯增量；8 个平台控制面占位命名空间仍待后端契约就绪后落地。 |
 | 1.4.2 | 稳定版 | `src/` 从扁平 36 文件按业务域重组为 per-domain 目录；公共导出符号集合、`exports`、`dist/` 路径一字未变（纯内部重组）。新增 TypeDoc API 文档。 |
 | 1.4.1 | 稳定版 | 新增 `Config.browserRefreshMode` / `refreshProxyURL`——浏览器 Web OAuth token 刷新策略（规避 issuer CORS 403）。 |
