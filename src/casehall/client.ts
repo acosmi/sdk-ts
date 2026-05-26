@@ -16,6 +16,7 @@ import type {
   BookConsultationRequest,
   LegalServiceOrder,
   LegalServiceSku,
+  LawyerCredentialMyView,
 } from './types';
 import { Client } from '../core/client';
 
@@ -66,6 +67,19 @@ declare module '@acosmi/sdk-ts' {
 
     /** 列出公开的 LEGAL_SERVICE SKU (匿名可调用, 复用 dist_compliance_sku benefit_type='LEGAL_SERVICE')。 */
     listLegalSKUs(region?: string, signal?: AbortSignal): Promise<LegalServiceSku[]>;
+
+    // =========================================================================
+    // 律师自查执业证审核状态 (v2.0.0+, P5 Phase 3 复核)
+    // =========================================================================
+
+    /**
+     * 律师自查执业证审核状态 — 返回登录用户作为律师身份提交的所有 credential 列表.
+     * 普通用户 (无 lawyer_profile) 调返 [] 不抛.
+     *
+     * v2.0.0+ 新增. 端点 `GET /api/casehall/lawyer-credentials/my`.
+     * @returns 按 createTime 倒序的 credential 列表
+     */
+    getMyLawyerCredentialStatus(signal?: AbortSignal): Promise<LawyerCredentialMyView[]>;
   }
 }
 
@@ -201,6 +215,21 @@ Client.prototype.listLegalSKUs = async function (
   const resp = await this.doJSON<APIResponse<LegalServiceSku[]>>(
     'GET',
     `/casehall/app/legal-skus${q}`,
+    null,
+    signal,
+  );
+  return resp.data ?? [];
+};
+
+// --- Lawyer Credential Self-Check (v2.0.0+, P5 Phase 3 复核) ---
+
+Client.prototype.getMyLawyerCredentialStatus = async function (
+  this: Client,
+  signal?: AbortSignal,
+): Promise<LawyerCredentialMyView[]> {
+  const resp = await this.doJSON<APIResponse<LawyerCredentialMyView[]>>(
+    'GET',
+    `/api/casehall/lawyer-credentials/my`,
     null,
     signal,
   );

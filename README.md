@@ -7,7 +7,7 @@
 ## 状态
 
 - 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
-- 当前版本：**1.9.0**（商品化总规划 P1-P7 namespace 全量落地。v1.9.0 finance namespace 发票/退款/对公转账（决策 14 零银行 API + 决策 15 退款规则 + R12 价格快照）；v1.8.1 enterprise namespace 企业席位（OWNER/ADMIN/MEMBER + 订阅/席位/用量）；v1.8.0 casehall namespace 法律案件咨询（律师公开视图 + 案件线索 + 咨询预约 + 5 Legal SKU）；v1.7.0 csign 合规 SKU 扩展 pricing namespace + subscription/pricing/products 三 namespace 沉淀。详见 [CHANGELOG](./CHANGELOG.md)）。`1.6.0` `ChatRequest.endUserId` + 11min 保活；`1.5.x` 文档复核 + `src/shared/` 跨域 DTO + compliance gateway S1-S6 rollup；`1.4.x` `src/` 按业务域重组 + 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端
+- 当前版本：**2.0.0**（Phase 3 复核 + 全量根治 BREAKING 升级，2026-05-25）。**Phase 3 复核**: 主仓 9 commit 闭环 20 P0 (RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约). **SDK 同步**: 新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师/企业 OWNER 自查端点; `finance/types.ts` P2-016 PII 注释升级 (含 keyVersion v1/v2 payload 协议); 新建 `docs/pii-role-matrix.md` (4 角色 × 3 PII 级矩阵); admin 写端点错误码改 HTTP 状态码语义 (`200+{ok:false}` → `403/404/501`). **v1.x 历史**: 1.9.0 finance / 1.8.1 enterprise / 1.8.0 casehall / 1.7.0 csign+pricing / 1.6.0 endUserId+11min 保活. 详见 [CHANGELOG](./CHANGELOG.md).
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
 - API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)

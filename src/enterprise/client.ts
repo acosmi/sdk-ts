@@ -12,6 +12,7 @@ import type {
   InviteMemberRequest,
   AssignSeatRequest,
   OrgConsumeReport,
+  EnterpriseKycMyStatusView,
 } from './types';
 import { Client } from '../core/client';
 
@@ -59,6 +60,19 @@ declare module '@acosmi/sdk-ts' {
 
     /** 企业消耗汇总 (订阅维度池子合计; 完整账单留 P6b). */
     getOrgConsumeReport(enterpriseId: number, signal?: AbortSignal): Promise<OrgConsumeReport>;
+
+    // =====================================================================
+    // KYC 自查 (v2.0.0+, P6a Phase 3 复核)
+    // =====================================================================
+
+    /**
+     * 企业 OWNER 自查 KYC 状态 — 返回登录用户作为 OWNER 的企业的最新 KYC 状态.
+     * 用户不是任何企业 OWNER 时返 `{enterpriseId:undefined}` 的空 view, 不抛.
+     *
+     * v2.0.0+ 新增. 端点 `GET /api/distribution/enterprise/kyc/my`.
+     * 单 OWNER 单企业假设; 多企业取第一个 ACTIVE OWNER 企业.
+     */
+    getMyEnterpriseKycStatus(signal?: AbortSignal): Promise<EnterpriseKycMyStatusView>;
   }
 }
 
@@ -202,4 +216,21 @@ Client.prototype.getOrgConsumeReport = async function (
     };
   }
   return resp.data;
+};
+
+// =====================================================================
+// KYC 自查 (v2.0.0+, P6a Phase 3 复核)
+// =====================================================================
+
+Client.prototype.getMyEnterpriseKycStatus = async function (
+  this: Client,
+  signal?: AbortSignal,
+): Promise<EnterpriseKycMyStatusView> {
+  const resp = await this.doJSON<APIResponse<EnterpriseKycMyStatusView>>(
+    'GET',
+    `/api/distribution/enterprise/kyc/my`,
+    null,
+    signal,
+  );
+  return resp.data ?? {};
 };

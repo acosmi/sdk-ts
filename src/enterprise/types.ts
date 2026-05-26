@@ -110,3 +110,29 @@ export interface OrgConsumeReport {
   totalPriceFen: number;
   note?: string;
 }
+
+/**
+ * 企业 OWNER 自查 KYC 状态视图 (v2.0.0+ 新增, P6a Phase 3 复核 SDK Phase C).
+ *
+ * 端点 `GET /api/distribution/enterprise/kyc/my` — 登录用户作为 OWNER 调返其企业 KYC 状态.
+ * 用户不是任何企业 OWNER 时返 `enterpriseId=null` 的空 view, 不抛.
+ *
+ * 与 tk-dist `EnterpriseKycMyStatusView` VO 对齐. 显式字段白名单, 已剔除 rawJson (PII L3,
+ * `@FieldEncrypt`) + reviewerId + providerName + providerRequestId 等 admin 字段.
+ */
+export interface EnterpriseKycMyStatusView {
+  /** null 表示用户不是任何企业 OWNER. */
+  enterpriseId?: number;
+  /** PENDING / COMPLETED / FAILED. */
+  status?: string;
+  /** LOW / MEDIUM / HIGH / UNKNOWN. */
+  riskLevel?: string;
+  /** 反洗钱命中标志, default false. */
+  sanctionsHit?: boolean;
+  /** admin override 后填充: APPROVED / REJECTED. */
+  overrideDecision?: string;
+  /** 仅 admin override 时填 (= overrideReason). */
+  reviewerNotes?: string;
+  /** ISO-8601, admin override 时间. */
+  reviewedAt?: string;
+}

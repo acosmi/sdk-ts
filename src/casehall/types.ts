@@ -113,6 +113,34 @@ export interface LegalServiceOrder {
   doneAt?: string;
 }
 
+/**
+ * 律师自查执业证审核状态视图 (v2.0.0+ 新增, P5 Phase 3 复核 SDK Phase C).
+ *
+ * 端点 `GET /api/casehall/lawyer-credentials/my` — 律师身份调返自己的所有 credential.
+ * 普通用户 (无 lawyer_profile 关联) 调返空 [], 不抛.
+ *
+ * 与 tk-dist `LawyerCredentialMyView` VO 对齐. 显式字段白名单, 已剔除 fields_json (PII L3)
+ * + ocrRawJson (admin only) 等敏感字段.
+ */
+export interface LawyerCredentialMyView {
+  /** Credential 主键. */
+  id: number;
+  /** LICENSE / CERTIFICATE / FIRM_LETTER / DIPLOMA / OTHER. */
+  credentialType?: string;
+  /** PENDING / OCR_PARSED / MANUAL_REVIEW / APPROVED / REJECTED. */
+  verificationStatus?: string;
+  /** OCR 置信度 0~1; null/undefined 表示尚未 OCR. 后端 BigDecimal → number 序列化. */
+  ocrConfidence?: number;
+  /** 低置信度需 admin 人工复核. */
+  manualReviewRequired?: boolean;
+  /** 仅 REJECTED 时非空. */
+  rejectionReason?: string;
+  /** ISO-8601 = createTime. */
+  submittedAt?: string;
+  /** ISO-8601, admin 审核完成时间; null 表示尚未审核. */
+  reviewedAt?: string;
+}
+
 /** 5 Legal SKU (与 dist_compliance_sku benefit_type='LEGAL_SERVICE' 同源). */
 export type LegalSkuCode =
   | 'LEGAL_CONSULTATION_ONCE'

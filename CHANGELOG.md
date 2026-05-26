@@ -5,14 +5,18 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.10.0] - 2026-05-25 (Unreleased)
+## [2.0.0] - 2026-05-25 — BREAKING (Phase 3 复核 + 全量根治)
 
-### Added
+商品化 P1-P7 Phase 3 深度复核审计 (主仓 9 commit, HEAD `e510f68a`) + SDK 全量同步.
+**用户裁决: major bump** (角色 fail-OPEN 别名废除 + admin 错误码契约变更 + PII 真加密 = breaking).
 
-- `casehall.getMyLawyerCredentialStatus()` — 律师自查执业证审核状态 (依赖主仓 GET `/api/casehall/lawyer-credentials/my`)
-- `enterprise.getMyEnterpriseKycStatus()` — 企业 OWNER 自查 KYC 状态 (依赖主仓 GET `/api/distribution/enterprise/kyc/my`)
+### Added (Phase C — 主仓 user-facing 端点同步)
 
-### Changed (BREAKING — minor 升级因含 admin 错误码契约变更)
+- `casehall.getMyLawyerCredentialStatus()` — 律师自查执业证审核状态. 端点 `GET /api/casehall/lawyer-credentials/my` (主仓 `LawyerCredentialConsumerController`). 普通用户调返 `[]` 不抛.
+- `enterprise.getMyEnterpriseKycStatus()` — 企业 OWNER 自查 KYC 状态. 端点 `GET /api/distribution/enterprise/kyc/my` (主仓 `EnterpriseKycConsumerController`). 非 OWNER 调返 `{enterpriseId:undefined}` 空 view, 不抛.
+- 新增类型 `LawyerCredentialMyView` (`src/casehall/types.ts`) + `EnterpriseKycMyStatusView` (`src/enterprise/types.ts`), 与主仓 VO 字段对齐, 显式白名单剔除 `fields_json` / `rawJson` 等 PII L3 字段.
+
+### Changed (BREAKING — Phase 3 复核引入的契约变更)
 
 - **admin 写端点响应改 HTTP 状态码语义**: csign / compliance-billing admin POST 端点
   (`/api/admin/csign/seals` / `/api/distribution/compliance-billing/commit|cancel|refund` 等)
