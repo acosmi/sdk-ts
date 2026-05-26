@@ -5,6 +5,12 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-05-25 — Packaging fix
+
+### Fixed
+
+- `package.json` `files` 字段白名单遗漏 — v2.0.0 publish 后发现 `docs/pii-role-matrix.md` (新建) 与 `docs/开发与发布手册.md` (修订) 未进 npm 包. 集成方 `npm install @acosmi/sdk-ts` 后 `node_modules/@acosmi/sdk-ts/docs/` 缺这两份关键文档. 修白名单加显式三份 `docs/*.md` (排除 `docs/api/` 1.7MB TypeDoc 输出避免包膨胀).
+
 ## [2.0.0] - 2026-05-25 — BREAKING (Phase 3 复核 + 全量根治)
 
 商品化 P1-P7 Phase 3 深度复核审计 (主仓 9 commit, HEAD `e510f68a`) + SDK 全量同步.
