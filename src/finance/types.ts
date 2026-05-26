@@ -16,6 +16,31 @@
  * listMyInvoices() 由后端 VO 视图返脱敏值 ("130********9876" 等), SDK 类型不强制 PII 级
  * 是因服务端已脱敏; 但 admin 直读 mapper 时该接口仍承载明文 — 调用方 (Web/Desktop) 必须
  * 自行判定上下文, 不要在公开页直接渲染 L3 字段.
+ *
+ * ---
+ *
+ * **v1.9.0+ 真落盘加密** (主仓 K10a PII Aspect IMPL-A→IMPL-F 闭环):
+ *
+ * - V51 finance 7 表族 (`dist_invoice` / `dist_corporate_transfer` / `dist_refund_record` 等)
+ *   敏感列改走 `@FieldEncrypt` 切面真加密落盘 (此前是 ALL明文); V63 列宽 VARCHAR→TEXT
+ *   兜密文; V64 backfill 老明文 → v2 payload. 切硬模式需运维显式设
+ *   `ENCRYPTION_STRICT_MODE=true`, 默认 fail-OPEN 兼容老明文读取直至切换.
+ *
+ * - **payload 协议 keyVersion v1/v2** (调用方无感, 仅 debug dump DB 可见):
+ *   - v1 格式: `enc::v1::wrap::iv::ct`, AAD = `"field"` (旧版兜底)
+ *   - v2 格式: `enc::v2::wrap::iv::ct::aad`, AAD = `"acosmi:pii:" + tableName.columnName`
+ *     (新版, 跨字段 ciphertext 不互换, 跨表/列加密上下文绑定防 confused-deputy 攻击)
+ *
+ * - **角色严格化** (v1.9.0+, 主仓 SensitiveSerializer.normalizeAuthority):
+ *   yudao 通用 `ROLE_ADMIN` 不再被识别为 `platform_admin` 视角 (旧别名 fail-OPEN 已根治).
+ *   调用方传 token 必须真有以下角色之一才能解密 L3 字段:
+ *   - `ROLE_PLATFORM_ADMIN` — 平台管理员 (跨租户 admin)
+ *   - `ROLE_S2S` — 服务对服务调用
+ *   - `ROLE_LAWYER` — 律师 (仅自己 L1/L2, L3 仍脱敏)
+ *   - `ROLE_CONSUMER` — 消费者 (仅自己 L1/L2, L3 仍脱敏)
+ *
+ *   未匹配上述任一者 → 视同 guest, L2/L3 全脱敏返回.
+ *   详细矩阵见 `docs/pii-role-matrix.md`.
  */
 export interface Invoice {
   id: number;

@@ -7,7 +7,7 @@
 ## 状态
 
 - 主实现 / 事实标准：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐
-- 当前版本：**1.6.0**（v1.6.0 新增 `ChatRequest.endUserId` 业务侧终端用户 id + SSE keep-alive 注释行自动跳过 + per-request 超时 5min→11min 覆盖上游"开始推理前最长 10min 保活"窗口；详见下方"用户隔离 (v1.6.0+)"+ [CHANGELOG](./CHANGELOG.md)）。`1.5.x` 文档复核 + `src/shared/` 跨域 DTO + compliance gateway S1-S6 rollup；`1.4.x` `src/` 按业务域重组 + 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端
+- 当前版本：**1.9.0**（商品化总规划 P1-P7 namespace 全量落地。v1.9.0 finance namespace 发票/退款/对公转账（决策 14 零银行 API + 决策 15 退款规则 + R12 价格快照）；v1.8.1 enterprise namespace 企业席位（OWNER/ADMIN/MEMBER + 订阅/席位/用量）；v1.8.0 casehall namespace 法律案件咨询（律师公开视图 + 案件线索 + 咨询预约 + 5 Legal SKU）；v1.7.0 csign 合规 SKU 扩展 pricing namespace + subscription/pricing/products 三 namespace 沉淀。详见 [CHANGELOG](./CHANGELOG.md)）。`1.6.0` `ChatRequest.endUserId` + 11min 保活；`1.5.x` 文档复核 + `src/shared/` 跨域 DTO + compliance gateway S1-S6 rollup；`1.4.x` `src/` 按业务域重组 + 浏览器 Web OAuth；`1.3.x` `client.compliance` 合规域客户端
 - 测试：发布前需通过 typecheck/lint/vitest/build/packed-tarball smoke (`npm run test:pack`)
 - API 参考文档：`npm run docs` 经 TypeDoc 生成到 `docs/api/`
 - 包链接：[npm](https://www.npmjs.com/package/@acosmi/sdk-ts) · [GitHub Releases](https://github.com/acosmi/sdk-ts/releases)
