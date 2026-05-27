@@ -233,4 +233,27 @@ describe('multi-process refresh token rotation', () => {
     expect(at).toBe('AT-R-after-R-same');
     expect(tokenEndpointCalls).toBe(1); // 只刷新一次, 没有因为 reload 多调
   });
+
+  it('refresh_token 已被服务端判定失效时清除本地 token, 防止反复重试', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url !== 'http://test.invalid/token') return new Response('nf', { status: 404 });
+      return jsonResponse(
+        { error: 'invalid_grant', error_description: 'refresh token not found' },
+        400,
+      );
+    }) as typeof fetch;
+
+    const staleTokens = makeTokenSet('R-lost-after-deploy', -10);
+    const store = new FileTokenStore(tokenPath);
+    await store.save(staleTokens);
+
+    const c = new Client({ serverURL: 'http://test.invalid', store });
+    c.meta = fakeMeta;
+    c.tokens = staleTokens;
+
+    await expect(c.ensureToken()).rejects.toThrow('local tokens cleared');
+    expect(c.getTokenSet()).toBeNull();
+    expect(await store.load()).toBeNull();
+  });
 });

@@ -21,6 +21,8 @@ export {
   revokeToken,
   newTokenSet,
   isSSLError,
+  OAuthTokenEndpointError,
+  isInvalidGrantError,
   EventAuthURL,
   EventComplete,
   EventError,
