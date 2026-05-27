@@ -38,6 +38,7 @@ import {
   authorize,
   newTokenSet,
   isSSLError,
+  isInvalidGrantError,
   EventComplete,
   EventError,
   ErrDiscovery,
@@ -643,6 +644,10 @@ export class Client {
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      if (isInvalidGrantError(e)) {
+        await this.clearInvalidRefreshToken();
+        throw new Error(`refresh token invalid; local tokens cleared: ${message}`);
+      }
       if (isLikelyBrowserOAuthCORSError(message)) {
         throw new Error(`${ErrOAuthCORSBlocked}: refresh token: ${message}`);
       }
@@ -681,11 +686,18 @@ export class Client {
 
     if (!resp.ok) {
       let message = '';
+      let oauthError = '';
       try {
-        const body = (await resp.json()) as { error?: unknown };
+        const body = (await resp.json()) as { error?: unknown; error_description?: unknown };
         if (typeof body.error === 'string') message = body.error;
+        if (typeof body.error === 'string') oauthError = body.error;
+        if (typeof body.error_description === 'string') message = body.error_description;
       } catch {
         // ignore non-JSON proxy errors
+      }
+      if (oauthError === 'invalid_grant') {
+        await this.clearInvalidRefreshToken();
+        throw new Error(`${ErrRefreshProxyFailed}: refresh token invalid; local tokens cleared`);
       }
       throw new Error(`${ErrRefreshProxyFailed}: HTTP ${resp.status}: ${message}`);
     }
@@ -713,6 +725,21 @@ export class Client {
     } catch (e) {
       console.warn(
         `[acosmi-sdk] warning: save refreshed token failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  private async clearInvalidRefreshToken(): Promise<void> {
+    this.tokens = null;
+    this.meta = null;
+    this.loginInFlight = false;
+    this.tokenReady = newDeferred<void>();
+    this.tokenReadyResolved = false;
+    try {
+      await this.store.clear();
+    } catch (e) {
+      console.warn(
+        `[acosmi-sdk] warning: clear invalid token failed: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
   }

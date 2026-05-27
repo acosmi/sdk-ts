@@ -12,6 +12,24 @@ import type { ClientRegistration, ServerMetadata, TokenResponse, TokenSet } from
 /** auth 专用超时 (毫秒) — 与 Go authHTTPClient 30s 一致 */
 const authTimeoutMs = 30_000;
 
+export class OAuthTokenEndpointError extends Error {
+  readonly status: number;
+  readonly oauthError: string;
+  readonly errorDescription: string;
+
+  constructor(status: number, oauthError: string, errorDescription: string) {
+    super(`token: HTTP ${status}: ${errorDescription || oauthError}`);
+    this.name = 'OAuthTokenEndpointError';
+    this.status = status;
+    this.oauthError = oauthError;
+    this.errorDescription = errorDescription;
+  }
+}
+
+export function isInvalidGrantError(err: unknown): boolean {
+  return err instanceof OAuthTokenEndpointError && err.oauthError === 'invalid_grant';
+}
+
 // =============================================================================
 // Discovery
 // =============================================================================
@@ -718,13 +736,16 @@ async function postToken(
   }
 
   if (!resp.ok) {
-    let errBody: { error_description?: string } = {};
+    let errBody: { error?: unknown; error_description?: unknown } = {};
     try {
-      errBody = (await resp.json()) as { error_description?: string };
+      errBody = (await resp.json()) as { error?: unknown; error_description?: unknown };
     } catch {
       // ignore
     }
-    throw new Error(`token: HTTP ${resp.status}: ${errBody.error_description ?? ''}`);
+    const oauthError = typeof errBody.error === 'string' ? errBody.error : '';
+    const errorDescription =
+      typeof errBody.error_description === 'string' ? errBody.error_description : '';
+    throw new OAuthTokenEndpointError(resp.status, oauthError, errorDescription);
   }
 
   try {
