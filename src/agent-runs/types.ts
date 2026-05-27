@@ -3,7 +3,21 @@
 // Public TypeScript API uses camelCase. The HTTP wire protocol uses snake_case
 // and is converted in client/agent-runs.ts.
 
+import type {
+  AdapterKind,
+  PermissionPolicy,
+  RunnerKind,
+  WorkspacePolicy,
+} from './remote-control';
+
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/**
+ * Remote-control runtime selector (Phase 3 / contract §3).
+ *   - 'standard'         existing chat/workflow path (default; backward compatible)
+ *   - 'crabcode_remote'  CrabCode remote-control session; requires runner + adapter
+ */
+export type AgentRunRuntime = 'standard' | 'crabcode_remote';
 
 export interface AgentRunLocalContextPolicy {
   enabled?: boolean;
@@ -29,6 +43,41 @@ export interface AgentRunCreateRequest {
   metadata?: Record<string, string>;
   localContextPolicy?: AgentRunLocalContextPolicy;
   artifactPolicy?: AgentRunArtifactPolicy;
+
+  // Phase 3+ remote-control extension (contract §3 / ADR-2):
+  //   When `runtime === 'crabcode_remote'`, `runner` + `adapter` are required and
+  //   the per-session permission/workspace policies are sent to the gateway.
+  //   Wire-format snake_case; SDK forwards even on older backends that ignore
+  //   unknown fields (forward compatible by design).
+  runtime?: AgentRunRuntime;
+  runner?: RunnerKind;
+  adapter?: AdapterKind;
+  permissionPolicy?: PermissionPolicy;
+  workspacePolicy?: WorkspacePolicy;
+}
+
+/**
+ * Narrow type for `agentRuns.createRemoteRun(req)`:
+ *   - runtime is fixed to `'crabcode_remote'`;
+ *   - runner + adapter are required;
+ *   - inherits everything else from AgentRunCreateRequest.
+ */
+export interface AgentRunRemoteCreateRequest extends AgentRunCreateRequest {
+  runtime: 'crabcode_remote';
+  runner: RunnerKind;
+  adapter: AdapterKind;
+}
+
+/** Options for `agentRuns.streamRemoteControl(runId)`. */
+export interface RemoteControlStreamOptions {
+  /**
+   * true by default. When enabled and the stream emits an `error` event with
+   * `final_status` set or a `done` event with terminal status, the iteration
+   * ends naturally — the consumer can inspect the last event to decide retry.
+   * Unlike `AgentRunStreamOptions.throwOnError`, no exception is thrown for
+   * non-terminal errors (contract §4: error is non-terminal; done is terminal).
+   */
+  yieldNonTerminalErrors?: boolean;
 }
 
 export interface AgentRun {

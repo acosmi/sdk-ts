@@ -19,12 +19,23 @@ import {
   type AgentRunDownload,
   type AgentRunLocalToolHandler,
   type AgentRunLocalToolResult,
+  type AgentRunRemoteCreateRequest,
   type AgentRunRunOptions,
   type AgentRunStatus,
   type AgentRunStreamEvent,
   type AgentRunStreamOptions,
   type AgentRunWithLocalToolsOptions,
+  type RemoteControlStreamOptions,
 } from './types';
+import {
+  isTerminalRemoteEvent,
+  parseRemoteControlEvent,
+  type AdapterKind,
+  type PermissionPolicy,
+  type RemoteControlEvent,
+  type RunnerKind,
+  type WorkspacePolicy,
+} from './remote-control';
 
 declare module '@acosmi/sdk-ts' {
   interface Client {
@@ -93,6 +104,76 @@ export class AgentRunsClient {
       signal,
       { retryOn401: false },
     ).then(fromWireRun);
+  }
+
+  /**
+   * Create a CrabCode remote-control agent run (contract §3, ADR-2 + ADR-5).
+   *
+   * Equivalent to `create()` with `runtime: 'crabcode_remote'` and the required
+   * `runner` + `adapter` fields set. Per-session policies (permission/workspace)
+   * are forwarded to the gateway, which is the only side allowed to enforce
+   * them (contract §6). The SDK never enforces remote permissions client-side.
+   *
+   * The corresponding stream uses `streamRemoteControl(runId)`, NOT `stream()`,
+   * because the event union is different (contract §4).
+   */
+  async createRemoteRun(
+    req: AgentRunRemoteCreateRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentRunCreateResponse> {
+    if (req.runtime !== 'crabcode_remote') {
+      throw new Error('createRemoteRun: runtime must be "crabcode_remote"');
+    }
+    if (!req.runner) throw new Error('createRemoteRun: runner is required');
+    if (!req.adapter) throw new Error('createRemoteRun: adapter is required');
+    return this.create(req, signal);
+  }
+
+  /**
+   * Stream remote-control events for a CrabCode remote run (contract §4).
+   *
+   * Yields the canonical 11-event union: text_delta / reasoning_delta /
+   * tool_call / tool_result / permission_request / permission_result /
+   * usage / settle / status / error / done.
+   *
+   * Iteration ends naturally when a terminal event (`done` or `settle`) is
+   * observed. Per contract §4, `error` alone is non-terminal — terminal errors
+   * are carried by `done.reason` / `done.final_status`.
+   *
+   * Unknown event types and malformed frames are silently skipped (warn-only),
+   * matching `parseRemoteControlEvent`'s null-return contract.
+   */
+  streamRemoteControl(
+    runId: string,
+    opts: RemoteControlStreamOptions = {},
+    signal?: AbortSignal,
+  ): AsyncIterable<RemoteControlEvent> {
+    return {
+      [Symbol.asyncIterator]: () => this.streamRemoteControlGen(runId, opts, signal),
+    };
+  }
+
+  private async *streamRemoteControlGen(
+    runId: string,
+    _opts: RemoteControlStreamOptions,
+    signal?: AbortSignal,
+  ): AsyncGenerator<RemoteControlEvent, void, void> {
+    const resp = await this.requestRaw(
+      'GET',
+      `/agent-runs/${encodeURIComponent(runId)}/stream`,
+      null,
+      signal,
+      { retryOn401: true, accept: 'text/event-stream' },
+    );
+    if (!resp.body) {
+      throw new Error('remote-control stream: empty response body');
+    }
+    for await (const rawEvent of readAgentRunSSEFrames(resp.body)) {
+      const ev = parseRemoteControlEvent(rawEvent);
+      if (!ev) continue;
+      yield ev;
+      if (isTerminalRemoteEvent(ev)) return;
+    }
   }
 
   listArtifacts(runId: string, signal?: AbortSignal): Promise<AgentRunArtifact[]> {
@@ -347,6 +428,28 @@ interface WireAgentRunCreateRequest {
     enabled?: boolean;
     max_files?: number;
   };
+  // Phase 3+ remote-control wire fields (contract §3 + §6).
+  runtime?: string;
+  runner?: RunnerKind;
+  adapter?: AdapterKind;
+  permission_policy?: WirePermissionPolicy;
+  workspace_policy?: WireWorkspacePolicy;
+}
+
+interface WirePermissionPolicy {
+  shell_allowed?: boolean;
+  shell_deny_list?: string[];
+  network_allowed?: boolean;
+  write_allowed?: boolean;
+  approval_timeout_ms?: number;
+  required_actors?: string[];
+}
+
+interface WireWorkspacePolicy {
+  read_only?: boolean;
+  allowed_paths?: string[];
+  denied_paths?: string[];
+  max_bytes?: number;
 }
 
 interface WireAgentRun {
@@ -384,6 +487,26 @@ interface WireAgentRunArtifactList {
   artifacts?: WireAgentRunArtifact[];
 }
 
+function toWirePermissionPolicy(p: PermissionPolicy): WirePermissionPolicy {
+  return {
+    shell_allowed: p.shellAllowed,
+    shell_deny_list: p.shellDenyList,
+    network_allowed: p.networkAllowed,
+    write_allowed: p.writeAllowed,
+    approval_timeout_ms: p.approvalTimeoutMs,
+    required_actors: p.requiredActors,
+  };
+}
+
+function toWireWorkspacePolicy(p: WorkspacePolicy): WireWorkspacePolicy {
+  return {
+    read_only: p.readOnly,
+    allowed_paths: p.allowedPaths,
+    denied_paths: p.deniedPaths,
+    max_bytes: p.maxBytes,
+  };
+}
+
 function toWireCreateRequest(req: AgentRunCreateRequest): WireAgentRunCreateRequest {
   return {
     app_id: req.appId,
@@ -403,6 +526,11 @@ function toWireCreateRequest(req: AgentRunCreateRequest): WireAgentRunCreateRequ
           allowed_tools: req.localContextPolicy.allowedTools,
         }
       : undefined,
+    runtime: req.runtime,
+    runner: req.runner,
+    adapter: req.adapter,
+    permission_policy: req.permissionPolicy ? toWirePermissionPolicy(req.permissionPolicy) : undefined,
+    workspace_policy: req.workspacePolicy ? toWireWorkspacePolicy(req.workspacePolicy) : undefined,
     artifact_policy: req.artifactPolicy
       ? {
           enabled: req.artifactPolicy.enabled,
@@ -453,6 +581,63 @@ function fromWireArtifact(resp: WireAgentRunArtifact): AgentRunArtifact {
     type: resp.type,
     metadata: resp.metadata,
   };
+}
+
+/**
+ * readAgentRunSSEFrames — emits raw parsed JSON payloads from the SSE body,
+ * one per SSE event. Used by `streamRemoteControl` to feed
+ * `parseRemoteControlEvent` (contract §4 union).
+ *
+ * Skips empty frames, `[DONE]` markers, comments, and JSON parse errors.
+ * Returns `event_name` injected into the payload as `__event__` when the
+ * payload itself does not carry a `type` field, so downstream parsers can
+ * recover the SSE event name.
+ */
+async function* readAgentRunSSEFrames(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<Record<string, unknown>, void, void> {
+  let eventName = '';
+  let dataLines: string[] = [];
+
+  const flush = (): Record<string, unknown> | null => {
+    if (dataLines.length === 0) return null;
+    const data = dataLines.join('\n');
+    dataLines = [];
+    if (data === '[DONE]') return null;
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        if (!('type' in obj) && eventName) {
+          obj.type = eventName;
+        }
+        return obj;
+      }
+    } catch {
+      // malformed frame: skip
+    }
+    return null;
+  };
+
+  for await (const line of iterSSELines(body)) {
+    if (line === '') {
+      const frame = flush();
+      eventName = '';
+      if (frame) yield frame;
+      continue;
+    }
+    if (line.startsWith(':')) continue;
+    if (line.startsWith('event:')) {
+      eventName = line.slice('event:'.length).trim();
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart());
+    }
+  }
+
+  const frame = flush();
+  if (frame) yield frame;
 }
 
 async function* readAgentRunEvents(
