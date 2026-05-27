@@ -45,7 +45,7 @@ npm install @acosmi/sdk-ts
 ```ts
 import { Client, allScopes } from '@acosmi/sdk-ts';
 
-const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL! });
+const client = new Client({ baseURL: process.env.ACOSMI_BASE_URL! });
 await client.login('My App', allScopes());
 
 const resp = await client.chat('claude-opus-4-7', {
@@ -55,6 +55,45 @@ const resp = await client.chat('claude-opus-4-7', {
 });
 console.log(resp.content);
 ```
+
+### Acosmi Gateway URL — `serverURL` / `baseURL` 公共契约 (v2.1+)
+
+`Client` 配置中 `serverURL` / `baseURL` / `baseUrl` 三字段同语义、互为 alias，归一化后必须相等；任传其一即可，多写时 normalize 后冲突会立刻抛错。
+
+```ts
+// 推荐拼写
+const client = new Client({ baseURL: 'https://acosmi.com' });
+
+// 与历史 serverURL 完全等价
+const same = new Client({ serverURL: 'https://acosmi.com' });
+
+// 多写一致 OK; 不一致抛错
+new Client({ serverURL: 'https://a.example', baseURL: 'https://b.example' });
+// → Error: Acosmi Gateway URL conflict: …
+```
+
+**红线 (Phase 0 契约 §1-§2)** — Acosmi Gateway URL 是 `@acosmi/sdk-ts` 调 Acosmi nexus-v4 API 的根：
+
+- 只接受 `http:` / `https:`；`ws:` / `wss:` 是 CrabCode `--sdk-url` RemoteIO 会话通道，**不是** SDK gateway URL，传入立刻抛错。
+- agent-runs / managed-models / notifications WS / compliance 都从同一个 normalized base 派生；SDK 内部 `apiURL()` 自动追加 `/api/v4`，不会重复拼。
+- 不推荐 runtime mutate `client.serverURL`；多 base 用 per-instance Client cache（例如 `Map<normalizedGatewayURL, Promise<Client>>`）。
+- `complianceBaseURL` 是独立第二根地址，不被 `baseURL` alias 覆盖。
+
+公共 helper：
+
+```ts
+import { Client, normalizeGatewayBaseURL, DEFAULT_GATEWAY_BASE_URL } from '@acosmi/sdk-ts';
+
+normalizeGatewayBaseURL('https://gw.example/api/v4/'); // → 'https://gw.example/api/v4'
+normalizeGatewayBaseURL('wss://session.example');      // → throw: only allows http/https
+DEFAULT_GATEWAY_BASE_URL;                              // → 'https://acosmi.com'
+
+const c = new Client({ baseURL: 'https://gw.example' });
+c.getBaseURL();   // → 'https://gw.example'  (= c.getServerURL())
+c.apiURL('/agent-runs'); // → 'https://gw.example/api/v4/agent-runs'
+```
+
+详见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。
 
 ### 用户隔离 (v1.6.0+)
 

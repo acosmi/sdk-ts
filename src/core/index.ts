@@ -5,9 +5,11 @@
 // === Client + 业务 mixins 宿主 ===
 export {
   Client,
+  DEFAULT_GATEWAY_BASE_URL,
   ErrOAuthCORSBlocked,
   ErrRefreshProxyFailed,
   ErrTokenExpired,
+  normalizeGatewayBaseURL,
   type BrowserRefreshMode,
   type Config,
   type FilterStatus,
