@@ -33,6 +33,10 @@ export * from './casehall';
 export * from './enterprise';
 // 商品化总规划 P7 (2026-05-25) — 财务 (发票/退款/对公转账) namespace
 export * from './finance';
+// Phase 7 (2026-05-27) — 第三方聊天 bridge 控制面 namespace
+// 契约: docs/audit/sdk-remote-control-contract-2026-05-27.md §6 + §7 + ADR-8
+// 仅 read-only metadata + ChannelEvent types; secret 永不出现在公共导出。
+export * from './chatbridge';
 
 // === Sanitize ===
 // sanitize/ 已是独立子包 (有自身 barrel)，命名空间导出留在根级，不经域 barrel 路由。
