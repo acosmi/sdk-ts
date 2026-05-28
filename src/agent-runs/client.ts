@@ -25,7 +25,6 @@ import {
   type AgentRunStreamEvent,
   type AgentRunStreamOptions,
   type AgentRunWithLocalToolsOptions,
-  type RemoteControlStreamOptions,
 } from './types';
 import {
   isTerminalRemoteEvent,
@@ -145,17 +144,15 @@ export class AgentRunsClient {
    */
   streamRemoteControl(
     runId: string,
-    opts: RemoteControlStreamOptions = {},
     signal?: AbortSignal,
   ): AsyncIterable<RemoteControlEvent> {
     return {
-      [Symbol.asyncIterator]: () => this.streamRemoteControlGen(runId, opts, signal),
+      [Symbol.asyncIterator]: () => this.streamRemoteControlGen(runId, signal),
     };
   }
 
   private async *streamRemoteControlGen(
     runId: string,
-    _opts: RemoteControlStreamOptions,
     signal?: AbortSignal,
   ): AsyncGenerator<RemoteControlEvent, void, void> {
     const resp = await this.requestRaw(

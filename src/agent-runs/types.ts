@@ -68,17 +68,10 @@ export interface AgentRunRemoteCreateRequest extends AgentRunCreateRequest {
   adapter: AdapterKind;
 }
 
-/** Options for `agentRuns.streamRemoteControl(runId)`. */
-export interface RemoteControlStreamOptions {
-  /**
-   * true by default. When enabled and the stream emits an `error` event with
-   * `final_status` set or a `done` event with terminal status, the iteration
-   * ends naturally — the consumer can inspect the last event to decide retry.
-   * Unlike `AgentRunStreamOptions.throwOnError`, no exception is thrown for
-   * non-terminal errors (contract §4: error is non-terminal; done is terminal).
-   */
-  yieldNonTerminalErrors?: boolean;
-}
+// 注: streamRemoteControl 不接受 options。按契约 §4, `error` 事件恒为非终结
+// (终结性错误由 `done.reason` / `done.final_status` 承载), 流仅在 `done` / `settle`
+// 终结事件后自然结束, 从不抛异常; 因此无需 yield/throw 开关 (此前的
+// RemoteControlStreamOptions.yieldNonTerminalErrors 是从不被读取的 no-op, 已删除)。
 
 export interface AgentRun {
   runId: string;

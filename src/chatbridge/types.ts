@@ -4,8 +4,11 @@
 //        + §7 (旧抽象不可复用) + 主索引 §5 Phase 7 + ADR-8.
 //
 // 设计纪律:
-//   - HTTP wire 协议字段为 snake_case (与 Nexus Go side 一致);
-//   - 公开 TypeScript API 一律 camelCase;
+//   - chatbridge 资源 GET 走 nexus-v4 model-direct 序列化, wire 字段为 camelCase
+//     (与 model/chat_bridge.go 的 json tag 逐字一致; 契约 §12 chatbridge 平面)。
+//     注意: 这与 remote-control 平面 (agent-runs 事件/policy 用 snake_case) 不同 ——
+//     nexus-v4 的 wire 约定按平面分, 不是全局统一;
+//   - 公开 TypeScript API 与 wire 同为 camelCase;
 //   - 平台 secret (plaintext / token / signing key) 永不出现在 SDK 公共 namespace;
 //     SDK 只见 read-only metadata + CredentialRef + fingerprint + ChannelEvents;
 //   - 7 个平台严格枚举, 任何新增需先改契约文档 + 主索引 §5 Phase 7 再扩本文件;
