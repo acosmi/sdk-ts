@@ -18,6 +18,12 @@ declare module '@acosmi/sdk-ts' {
 
     /** 列出当前用户已激活订阅 (跨档位; 通常 1 条 active) */
     listUserSubscriptions(signal?: AbortSignal): Promise<UserSubscription[]>;
+
+    /**
+     * 按 planCode 精确取单个可售订阅计划 (V41 起 planCode 在 active 内唯一)。
+     * 复用 listPlans 客户端过滤, 未命中返回 null。减少 C 端按字段手筛 (deep-review §12.3)。
+     */
+    getPlanByCode(planCode: string, signal?: AbortSignal): Promise<SubscriptionPlan | null>;
   }
 }
 
@@ -47,4 +53,14 @@ Client.prototype.listUserSubscriptions = async function (
     signal,
   );
   return Array.isArray(resp.data) ? resp.data : [];
+};
+
+Client.prototype.getPlanByCode = async function (
+  this: Client,
+  planCode: string,
+  signal?: AbortSignal,
+): Promise<SubscriptionPlan | null> {
+  if (!planCode) return null;
+  const plans = await this.listPlans(undefined, signal);
+  return plans.find((p) => p.planCode === planCode) ?? null;
 };
