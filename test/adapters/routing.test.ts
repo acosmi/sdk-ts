@@ -76,6 +76,22 @@ describe('getAdapterForModel — 四级决策', () => {
       model: { ...baseModel, provider: 'dashscope' } as ManagedModel,
       want: ProviderFormat.OpenAI,
     },
+    {
+      // 护栏: preferred 与 supported_formats 矛盾 → 不路由到不支持的格式
+      name: 'preferred anthropic ignored when supported_formats lacks it',
+      model: { ...baseModel, provider: 'dashscope', preferred_format: 'anthropic', supported_formats: ['openai'] } as ManagedModel,
+      want: ProviderFormat.OpenAI,
+    },
+    {
+      name: 'preferred openai ignored when supported_formats lacks it',
+      model: { ...baseModel, provider: 'dashscope', preferred_format: 'openai', supported_formats: ['anthropic'] } as ManagedModel,
+      want: ProviderFormat.Anthropic,
+    },
+    {
+      name: 'preferred openai honored when in supported_formats',
+      model: { ...baseModel, provider: 'dashscope', preferred_format: 'openai', supported_formats: ['anthropic', 'openai'] } as ManagedModel,
+      want: ProviderFormat.OpenAI,
+    },
   ];
 
   for (const tc of cases) {
