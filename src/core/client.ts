@@ -97,16 +97,114 @@ export const FilterStatusFallbackMissingUser: FilterStatus = 'fallback-missing-u
 export const FilterStatusUnknown: FilterStatus = '';
 
 // =============================================================================
+// Gateway URL 契约 (Phase 0 §2)
+// =============================================================================
+
+/** Acosmi Gateway URL 默认值 — 与历史行为一致。 */
+export const DEFAULT_GATEWAY_BASE_URL = 'https://acosmi.com';
+
+/**
+ * normalizeGatewayBaseURL — Acosmi nexus-v4 API Gateway URL 的归一化与校验。
+ *
+ * 红线 (Phase 0 契约 §1-§2):
+ *   1. 仅允许 `http:` / `https:`；`ws:` / `wss:` 是 CrabCode `--sdk-url`
+ *      RemoteIO 会话通道，不是 SDK API gateway URL，传入立刻抛错。
+ *   2. URL 必须可被 `new URL()` 解析；非法输入立刻抛错。
+ *   3. host 必须非空；query/hash 不允许 (gateway URL 不带 query)。
+ *   4. pathname 去尾 `/`；末段允许是 `/api/v4` (`apiURL()` 不会重复追加)。
+ *   5. 返回值是 `origin + pathname`，不带 query/hash/trailing slash。
+ *
+ * 该函数是公共 helper：CrabCode AppServer worker、CrabClaw 内部、外部第三方 SDK
+ * 都应在写入 Acosmi base 之前调用它一次，避免 ws/wss 误入 SDK API client。
+ */
+export function normalizeGatewayBaseURL(input: unknown): string {
+  if (typeof input !== 'string') {
+    throw new TypeError(
+      'Acosmi Gateway URL must be a string (see docs/audit/sdk-remote-control-contract-2026-05-27.md §2)',
+    );
+  }
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    throw new Error('Acosmi Gateway URL is empty');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Acosmi Gateway URL is not a valid URL: ${trimmed}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(
+      `Acosmi Gateway URL only allows http/https, got ${parsed.protocol} (${trimmed}). ` +
+        `CrabCode --sdk-url (ws/wss) is the RemoteIO session channel, not a SDK gateway URL ` +
+        `— see docs/audit/sdk-remote-control-contract-2026-05-27.md §1.`,
+    );
+  }
+  if (!parsed.host) {
+    throw new Error(`Acosmi Gateway URL has empty host: ${trimmed}`);
+  }
+  if (parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new Error(`Acosmi Gateway URL must not contain query or hash: ${trimmed}`);
+  }
+  // 去尾 / (空 path => 仅 origin)
+  const path = parsed.pathname.replace(/\/+$/, '');
+  return path ? `${parsed.origin}${path}` : parsed.origin;
+}
+
+/**
+ * pickAndNormalizeGatewayURL — Config 中三个 alias (serverURL/baseURL/baseUrl)
+ * 取唯一规范值。多字段同时传入且 normalize 后不等时抛错。
+ * 未传任一字段返回 `null`，由调用方决定是否填默认值。
+ */
+function pickAndNormalizeGatewayURL(cfg: Config): string | null {
+  const inputs: Array<readonly [name: 'serverURL' | 'baseURL' | 'baseUrl', value: string]> = [];
+  if (cfg.serverURL !== undefined) inputs.push(['serverURL', cfg.serverURL] as const);
+  if (cfg.baseURL !== undefined) inputs.push(['baseURL', cfg.baseURL] as const);
+  if (cfg.baseUrl !== undefined) inputs.push(['baseUrl', cfg.baseUrl] as const);
+  if (inputs.length === 0) return null;
+  const normalized = inputs.map(([n, v]) => [n, normalizeGatewayBaseURL(v)] as const);
+  for (let i = 1; i < normalized.length; i++) {
+    if (normalized[i][1] !== normalized[0][1]) {
+      throw new Error(
+        `Acosmi Gateway URL conflict: Config.${normalized[0][0]}=${normalized[0][1]} ` +
+          `vs Config.${normalized[i][0]}=${normalized[i][1]} — pass only one field.`,
+      );
+    }
+  }
+  return normalized[0][1];
+}
+
+// =============================================================================
 // Config
 // =============================================================================
 
 /** 客户端配置 */
 export interface Config {
   /**
-   * nexus-v4 API 根地址 (默认 https://acosmi.com)。
-   * SDK 自动追加 /api/v4, 无需手动拼接。
+   * Acosmi nexus-v4 API Gateway 根地址 (默认 https://acosmi.com)。
+   *
+   * 该 URL 是 `@acosmi/sdk-ts` 调 Acosmi 云端 API 的根 — agent-runs /
+   * managed-models / notifications WS / compliance 都从它派生。SDK 内部
+   * `apiURL()` 会自动追加 `/api/v4`，调用方无需手动拼。
+   *
+   * 见 Phase 0 契约 `docs/audit/sdk-remote-control-contract-2026-05-27.md` §1-§2:
+   *   - 协议: 仅允许 `http:` / `https:`；`ws:` / `wss:` 是 CrabCode `--sdk-url`
+   *     RemoteIO 会话通道，不是 SDK gateway URL，传入将抛 `Error`。
+   *   - `serverURL` / `baseURL` / `baseUrl` 三字段同语义，多写时 normalize 后必须相等。
    */
   serverURL?: string;
+
+  /**
+   * `serverURL` 的标准 alias (推荐拼写)。语义、normalize、校验完全等同 serverURL。
+   * 见 Phase 0 契约 §2。同时传入 serverURL/baseURL/baseUrl 时三者 normalize 后必须相等。
+   */
+  baseURL?: string;
+
+  /**
+   * `serverURL` 的 camelCase-小写 alias。语义、normalize、校验完全等同 serverURL。
+   * 见 Phase 0 契约 §2。
+   */
+  baseUrl?: string;
 
   /** token 持久化实现, 缺省时按平台选 (Node File / Browser LocalStorage / Memory) */
   store?: TokenStore;
@@ -275,7 +373,10 @@ export class Client {
   private coefMu: Promise<void> = Promise.resolve();
 
   constructor(cfg: Config = {}) {
-    this.serverURL = (cfg.serverURL ?? 'https://acosmi.com').replace(/\/+$/, '');
+    // Phase 0 §2: serverURL/baseURL/baseUrl 三字段同语义, 多写时 normalize 后必须相等;
+    // 任一字段都会经 normalizeGatewayBaseURL 校验 (拒 ws/wss/拒空/拒 query/hash).
+    const picked = pickAndNormalizeGatewayURL(cfg);
+    this.serverURL = picked ?? DEFAULT_GATEWAY_BASE_URL;
     this.complianceBaseURL = cfg.complianceBaseURL
       ? cfg.complianceBaseURL.replace(/\/+$/, '')
       : null;
@@ -315,6 +416,22 @@ export class Client {
   /** 是否已授权 (有可用 token) */
   isAuthorized(): boolean {
     return this.tokens != null;
+  }
+
+  /**
+   * 返回归一化后的 Acosmi Gateway URL (= `serverURL` 字段). readonly helper.
+   *
+   * Phase 0 §2 红线:
+   *   - 不要 mutate `client.serverURL` 字段实现 base 切换; 用 per-base Client 实例.
+   *   - 该值仅供日志/排查/上层缓存键使用, 不重新 normalize 它 (构造期已 normalize).
+   */
+  getServerURL(): string {
+    return this.serverURL;
+  }
+
+  /** `getServerURL()` 的 alias — Phase 0 §2 baseURL 与 serverURL 同义. */
+  getBaseURL(): string {
+    return this.serverURL;
   }
 
   /** 当前 token 信息 (用于 CLI whoami 显示) */

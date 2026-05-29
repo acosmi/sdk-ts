@@ -3,7 +3,21 @@
 // Public TypeScript API uses camelCase. The HTTP wire protocol uses snake_case
 // and is converted in client/agent-runs.ts.
 
+import type {
+  AdapterKind,
+  PermissionPolicy,
+  RunnerKind,
+  WorkspacePolicy,
+} from './remote-control';
+
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/**
+ * Remote-control runtime selector (Phase 3 / contract §3).
+ *   - 'standard'         existing chat/workflow path (default; backward compatible)
+ *   - 'crabcode_remote'  CrabCode remote-control session; requires runner + adapter
+ */
+export type AgentRunRuntime = 'standard' | 'crabcode_remote';
 
 export interface AgentRunLocalContextPolicy {
   enabled?: boolean;
@@ -29,7 +43,35 @@ export interface AgentRunCreateRequest {
   metadata?: Record<string, string>;
   localContextPolicy?: AgentRunLocalContextPolicy;
   artifactPolicy?: AgentRunArtifactPolicy;
+
+  // Phase 3+ remote-control extension (contract §3 / ADR-2):
+  //   When `runtime === 'crabcode_remote'`, `runner` + `adapter` are required and
+  //   the per-session permission/workspace policies are sent to the gateway.
+  //   Wire-format snake_case; SDK forwards even on older backends that ignore
+  //   unknown fields (forward compatible by design).
+  runtime?: AgentRunRuntime;
+  runner?: RunnerKind;
+  adapter?: AdapterKind;
+  permissionPolicy?: PermissionPolicy;
+  workspacePolicy?: WorkspacePolicy;
 }
+
+/**
+ * Narrow type for `agentRuns.createRemoteRun(req)`:
+ *   - runtime is fixed to `'crabcode_remote'`;
+ *   - runner + adapter are required;
+ *   - inherits everything else from AgentRunCreateRequest.
+ */
+export interface AgentRunRemoteCreateRequest extends AgentRunCreateRequest {
+  runtime: 'crabcode_remote';
+  runner: RunnerKind;
+  adapter: AdapterKind;
+}
+
+// 注: streamRemoteControl 不接受 options。按契约 §4, `error` 事件恒为非终结
+// (终结性错误由 `done.reason` / `done.final_status` 承载), 流仅在 `done` / `settle`
+// 终结事件后自然结束, 从不抛异常; 因此无需 yield/throw 开关 (此前的
+// RemoteControlStreamOptions.yieldNonTerminalErrors 是从不被读取的 no-op, 已删除)。
 
 export interface AgentRun {
   runId: string;

@@ -9,5 +9,8 @@
 // === 类型 ===
 export * from './types';
 
+// === Phase 3 远程控制契约 (docs/audit/sdk-remote-control-contract-2026-05-27.md §3-§4) ===
+export * from './remote-control';
+
 // === 子客户端 (导出类 + declaration-merge agentRuns getter 到 Client.prototype) ===
 export { AgentRunsClient } from './client';
