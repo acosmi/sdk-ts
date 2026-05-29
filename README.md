@@ -7,7 +7,8 @@
 ## 状态
 
 - **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
-- **当前版本：`2.0.1`**（packaging fix — `package.json.files` 数组补齐 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md`，2026-05-25）。
+- **当前 npm 版本：`2.0.1`**（packaging fix — `package.json.files` 数组补齐 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md`，2026-05-25）。
+- **`v2.1`（开发中，未发布）**：远程控制 CrabCode 多接入面 —— `serverURL`/`baseURL` Gateway URL 公共契约（见下方小节）、`agentRuns.createRemoteRun` / `agentRuns.streamRemoteControl` + 11 事件 union（见 §Agent Runs → 远程控制）、`chatbridge` 第三方聊天平台桥接类型（types-only 骨架，见 §Chat Bridge）、专用 `remote_control` scope（不进 `allScopes()`）。契约见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。**尚未 npm publish**：本节描述的 API 已在主干实现，发布需走手册 §9 流程升 version + tag。
 - **v2.0.0 BREAKING（Phase 3 复核 + 全量根治，2026-05-25）摘要**：
   - SDK 同步主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。
   - 新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师 / 企业 OWNER 自查端点（纯增量）。
@@ -240,6 +241,75 @@ await client.agentRuns.cancel(run.runId); // safe to call from UI cancel buttons
 | `error` | 失败事件（`throwOnError:true` 默认会转 `AgentRunStreamError` 抛出） | `error.code`、`error.message`、`error.stage`、`error.retryable` |
 | `done` | 流终止 | `runId`、`status` |
 
+### 远程控制 — CrabCode remote-control（v2.1 开发中）
+
+远程控制是 Agent Run 的一个独立 runtime（`runtime: 'crabcode_remote'`），用于把 CrabCode 子进程的会话/工具/权限循环经服务端适配成 C 端可消费的事件流。它**不复用** `agentRuns.stream` 的旧事件 union，事件协议另成一套（契约 §4 的 11 事件）。
+
+```ts
+import { Client, remoteControlScopes } from '@acosmi/sdk-ts';
+
+const client = new Client({ baseURL: process.env.ACOSMI_BASE_URL! });
+// 远控是高风险 scope，不在 allScopes() 内，必须显式申请
+await client.login('CrabCode Remote', remoteControlScopes());
+
+const run = await client.agentRuns.createRemoteRun({
+  appId: 'crabcode',
+  input: '重构这个函数并跑测试',
+  runtime: 'crabcode_remote', // 固定值
+  runner: 'cloud',            // 'cloud' | 'desktop' | 'local_embedded'
+  adapter: 'remote_io',       // 6 选 1，见下表
+  permissionPolicy: { shellAllowed: true, shellDenyList: ['rm', 'shutdown'], approvalTimeoutMs: 30_000 },
+  workspacePolicy: { readOnly: false, deniedPaths: ['/etc', '/root'] },
+});
+
+for await (const ev of client.agentRuns.streamRemoteControl(run.runId)) {
+  switch (ev.type) {
+    case 'text_delta':         process.stdout.write(ev.text); break;
+    case 'permission_request': /* 渲染审批卡片，回写 permission_result */ break;
+    case 'settle':             console.log('billed', ev.billed); break;
+  }
+}
+
+await client.agentRuns.cancel(run.runId); // UI 中止走服务端 cancel control frame，不是 fetch abort
+```
+
+要点：
+
+- **scope 隔离**：远控用专用 `remote_control` scope（服务端展开为 `remote_control:{agent-run,session-control,permission-response}` 三子项）；**绝不复用** `models:chat`/`ai`，且 `allScopes()` 不含它——桌面登录不会自动获得远控权限。用 `remoteControlScopes()` 或显式 `[...allScopes(), ScopeRemoteControl]`。
+- **adapter / runner**（`AdapterKind` / `RunnerKind`，契约 §3 placement 矩阵）：
+
+  | adapter | 适用 |
+  | --- | --- |
+  | `remote_io` | 单次纯会话流（CrabCode `--sdk-url` ws/wss） |
+  | `app_server_tcp_ws` | Desktop 已登录、本机 AppServer loopback RPC |
+  | `bridge_ccr` | 云端/托管 runner，session pool + heartbeat |
+  | `app_server_uds` / `stdio_stream_json` | 同机父子进程内嵌 |
+  | `tauri_managed_app_server` | Tauri native 托管 lifecycle |
+
+- **wire 约定（契约 §12-§14，按平面分）**：远控属 **snake_case 平面**——`permissionPolicy`/`workspacePolicy` 等 SDK camelCase 入参由 SDK 翻译为 snake_case wire（`shell_allowed`/`approval_timeout_ms`/`denied_paths`…）；时长一律**整数毫秒**（`approvalTimeoutMs`，禁 `time.Duration` 上 wire）。事件帧为**扁平信封**（`type`+`seq`+字段同级，snake_case），SDK 用 `parseRemoteControlEvent(raw)` 翻译为强类型 `RemoteControlEvent`。
+- **11 事件 union**（`RemoteControlEvent`，契约 §4）：`text_delta` / `reasoning_delta` / `tool_call` / `tool_result` / `permission_request` / `permission_result` / `usage` / `settle` / `status` / `error` / `done`。`error` **恒为非终结**（终结性错误由 `done.reason`/`done.finalStatus` 承载），`done` / `settle` 才终结流——故 `streamRemoteControl` 不接受 options、从不抛异常；用 `isTerminalRemoteEvent(ev)` 判终结。
+- **辅助导出**：`parseRemoteControlEvent` / `isTerminalRemoteEvent` / `AdapterKind` / `RunnerKind` / `RemoteControlEvent` / `RemoteSessionPlacement` / `PermissionPolicy` / `WorkspacePolicy`（`src/agent-runs/remote-control.ts`）。
+
+## Chat Bridge（第三方聊天平台桥接，v2.1 开发中 · types-only 骨架）
+
+`chatbridge` 从根入口导出第三方聊天平台（飞书/企微/钉钉/Slack/Teams/Telegram/WhatsApp）接入 Acosmi 远控的**稳定类型契约**。Phase 7 仅交付类型骨架：**SDK 暂无 `client.chatBridge.*` 方法**，平台 webhook/凭证/桥接 handler 是 Phase 7B 后端工作；平台 SDK 依赖留在独立 adapter 包，不进主包。
+
+```ts
+import {
+  isPlatform, isRegion, isChannelInboundEvent, asCredentialRef,
+  type Platform, type ChatCredentialPublic, type ChannelInboundEvent,
+} from '@acosmi/sdk-ts';
+
+isPlatform('feishu');             // → true（7 平台枚举运行时守卫）
+asCredentialRef('cred_abc...');   // → branded CredentialRef（防 plaintext 误传）
+```
+
+边界（契约 §6 + §16）：
+
+- 平台 secret（bot token / signing key / AES key）**只入上游 credential vault**；SDK 公共面只见 `CredentialRef`（`cred_<base32>`）+ `fingerprint` + 脱敏 metadata，**永不**出现 ciphertext / plaintext（`ChatCredentialPublic` 编译期即无密文字段）。
+- **wire 平面**：chatbridge 资源视图走 nexus-v4 model-direct 序列化，字段为 **camelCase**（与 remote-control 的 snake_case 平面不同，详见契约 §12）。
+- 平台原始 thread / sender / workspace ID 一律 SHA256 hash 后入库（`threadHash`/`senderHash`）。
+
 ## 认证
 
 ### 浏览器内 / 自动 OAuth（推荐）
@@ -308,6 +378,8 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Client 构造** | `new Client(cfg)`（同步），`Client.create(cfg)`（async；预加载已有 TokenStore）            |
 | **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`, `chatMessages`, `chatMessagesStream`, `buildChatRequest` |
 | **Agent Runs** | `agentRuns.create`, `agentRuns.stream`, `agentRuns.run`, `agentRuns.cancel`, `agentRuns.get`, `agentRuns.listArtifacts`, `agentRuns.downloadArtifact`, `agentRuns.submitLocalToolResult`, `agentRuns.runWithLocalTools` |
+| **Agent Runs — 远程控制**（v2.1） | `agentRuns.createRemoteRun`, `agentRuns.streamRemoteControl`；helper：`parseRemoteControlEvent`, `isTerminalRemoteEvent`；scope：`remoteControlScopes()` / `ScopeRemoteControl`（不进 `allScopes()`） |
+| **Chat Bridge**（v2.1 · types-only） | 无 client 方法（Phase 7B 后端落地）；导出类型守卫 `isPlatform`, `isRegion`, `isIntegrationStatus`, `isChannelInboundEvent`, `asCredentialRef` |
 | **Auth — 内置 Loopback OAuth** | `login`, `loginWithHandler`, `logout`, `ensureToken`, `forceRefresh`, `isAuthorized`, `getTokenSet` |
 | **Auth — 手动 OAuth 原语** | `discover`, `discoverWithProfile`, `register`, `authorize`, `exchangeCode`, `refreshToken`, `revokeToken`, `generateState` |
 | **Auth — 浏览器 Web OAuth (v1.4.0+)** | `discoverWebOAuthMetadata`, `registerWebOAuthClient`, `createWebAuthorizationRequest`, `completeWebAuthorizationRequest` |
@@ -789,7 +861,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.0.1 | **当前稳定版** | **Packaging fix — 纯发布元数据，无源码改动**。`package.json.files` 数组补 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md` 两项，让 v2.0.0 引入的 PII 角色矩阵与开发手册随 npm tarball 一并下发。从 v2.0.0 升级到 v2.0.1 无需任何 review。 |
+| 2.1 | **开发中（未发布）** | **远程控制 CrabCode 多接入面**。`serverURL`/`baseURL`/`baseUrl` Gateway URL 公共契约 + `normalizeGatewayBaseURL`（仅 http/https，拒 ws/wss）；`agentRuns.createRemoteRun` / `streamRemoteControl` + 11 事件 `RemoteControlEvent` union + `parseRemoteControlEvent` / `isTerminalRemoteEvent`；`AdapterKind`(6) / `RunnerKind`(3) / `PermissionPolicy` / `WorkspacePolicy`；专用 `remote_control` scope（不进 `allScopes()`，`remoteControlScopes()`）；`chatbridge` 第三方聊天平台类型骨架（types-only，无 client 方法）。wire 约定按平面分（远控 snake_case + 毫秒整数 / chatbridge camelCase，契约 §12-§14）。**尚未 npm publish**。 |
+| 2.0.1 | **当前稳定版（npm latest）** | **Packaging fix — 纯发布元数据，无源码改动**。`package.json.files` 数组补 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md` 两项，让 v2.0.0 引入的 PII 角色矩阵与开发手册随 npm tarball 一并下发。从 v2.0.0 升级到 v2.0.1 无需任何 review。 |
 | 2.0.0 | **BREAKING** | **Phase 3 复核 + 全量根治（2026-05-25）**。主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。**SDK 同步**：新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师/企业 OWNER 自查端点；`finance/types.ts` P2-016 PII Javadoc 升级（含 `keyVersion` v1/v2 payload 协议）；新建 `docs/pii-role-matrix.md`（4 角色 × 3 PII 级矩阵）；admin 写端点错误码改 HTTP 状态码语义（`200+{ok:false}` → `403/404/501`）。**升级指引详见 §"v2.0.0 升级指引"**。SDK 公开类型 / 方法签名零移除、零改名；BREAKING 范围在网关后端契约。 |
 | 1.9.0 | 稳定版 | **finance 域落地（商品化总规划 P7）**。新增 `client.finance.*`：`listMyInvoices` / `requestInvoice` / `listMyRefunds` / `requestRefund` / `listMyCorporateTransfers` / `initiateCorporateTransfer` / `uploadCorporateTransferProof`（决策 14/15 + R12）。发票 / 退款 / 对公转账三条业务线全量接入；金额一律用 string（json.Number 端口，避免 JS 浮点损失）。 |
 | 1.8.1 | 稳定版 | **enterprise 企业席位域落地（商品化总规划 P6a）**。新增 `client.enterprise.*`：`listMyEnterprises` / `getEnterprise` / `inviteMember` / `listEnterpriseMembers` / `listOrgSubscriptions` / `listSeats` / `assignSeat` / `revokeSeat` / `getOrgConsumeReport`。OWNER/ADMIN 权限下席位月度变更 ≤ 3 次（超出返 41xxx 业务码）；订阅 + 席位 + 用量报表三视图齐备。 |
