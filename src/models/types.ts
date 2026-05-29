@@ -67,6 +67,54 @@ export interface ModelCapabilities {
    * 调用方不应通过模型名 substring 推断此能力; 必须读上游下发字段.
    */
   supports_desktop_visual_understanding?: boolean;
+
+  /**
+   * 图片生成能力 (v1.3+): 为 true 表示该托管模型是图片生成模型 (DALL·E / SD / 即梦 等),
+   * 应通过 client.generateImage() 调用, 而非 chat(). 计量维度由上游派生为 IMAGE (按图计费)。
+   */
+  supports_image_generation?: boolean;
+
+  /**
+   * 视频生成能力 (v1.3+): 为 true 表示该托管模型是视频生成模型 (Sora / 可灵 / Runway 等),
+   * 应通过 client.generateVideo() + pollVideoTask() 调用。计量维度派生为 VIDEO (按时长计费)。
+   */
+  supports_video_generation?: boolean;
+}
+
+/** 图片生成请求 (client.generateImage) */
+export interface ImageGenerationRequest {
+  prompt: string;
+  /** 缺省 1024 */
+  width?: number;
+  /** 缺省 1024 */
+  height?: number;
+  style?: string;
+}
+
+/** 图片生成响应 */
+export interface ImageGenerationResponse {
+  url?: string;
+  b64_json?: string;
+  revised_prompt?: string;
+  requestId?: string;
+}
+
+/** 视频生成请求 (client.generateVideo) */
+export interface VideoGenerationRequest {
+  prompt: string;
+  resolution?: string;
+  /** 时长 (秒) */
+  duration?: number;
+}
+
+/** 视频任务响应 (创建返回 taskId; 轮询返回 status/videoUrl) */
+export interface VideoTaskResponse {
+  taskId: string;
+  /** pending | running | completed | failed */
+  status?: string;
+  videoUrl?: string;
+  error?: string;
+  requestId?: string;
 }
 
 /**
