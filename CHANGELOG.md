@@ -5,6 +5,23 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-05-28 — 远程控制 CrabCode 多接入面
+
+Additive minor。公开类型 / 方法签名零移除、零改名。契约见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。
+
+### Added
+
+- **Acosmi Gateway URL 公共契约**：`serverURL` / `baseURL` / `baseUrl` 三别名 + `normalizeGatewayBaseURL()`（仅接受 `http`/`https`，拒绝 `ws`/`wss` 及空 host，规整尾斜杠）。详见 README §"Acosmi Gateway URL 公共契约"。
+- **远程控制（CrabCode remote-control）**，`agentRuns` 命名空间下、事件协议独立于旧 `stream`：
+  - `agentRuns.createRemoteRun(req, signal?)` — `req.runtime` 固定 `'crabcode_remote'`，`runner` + `adapter` 必填。
+  - `agentRuns.streamRemoteControl(runId, signal?)` — 无 options 参数；`error` 恒非终结、`done`/`settle` 终结、从不抛异常。
+  - 11 事件 `RemoteControlEvent` union + helper `parseRemoteControlEvent(raw)`（wire→强类型，未知 type 返回 `null`）/ `isTerminalRemoteEvent(ev)`。
+  - 枚举：`AdapterKind`（6）/ `RunnerKind`（3）/ `PermissionPolicy` / `WorkspacePolicy`。
+  - 专用 scope `remote_control`（+ 3 子 scope）：`remoteControlScopes()` / `ScopeRemoteControl`，**不进 `allScopes()`**，绝不复用 `models:chat` / `ai`。
+  - wire 约定按平面分（契约 §12）：远控平面 = snake_case + 时长整数毫秒（`approval_timeout_ms`）；唯一序列化出口 `RemoteSessionEvent.ToWire()`，跨语言金标 fixtures 护栏（`test/remote-control-wire-golden.test.ts` ⇄ 后端 `wire_golden.json`）。
+- **`chatbridge` 第三方聊天平台桥接类型骨架**（types-only，无 `client.chatBridge.*` 方法，Phase 7B 后端落地）：导出类型 + 守卫 `isPlatform` / `isRegion` / `isIntegrationStatus` / `isChannelInboundEvent` / `asCredentialRef`。资源视图平面 = camelCase；secret 只入上游 vault，公共面仅见 `CredentialRef` + fingerprint + 脱敏 metadata（契约 §16）。
+- `subscription.getPlanByCode(planCode, signal?)` — 按 `planCode` 精确取单个可售订阅计划（复用 `listPlans` 客户端过滤，未命中返回 `null`；deep-review §12.3）。
+
 ## [2.0.1] - 2026-05-25 — Packaging fix
 
 ### Fixed

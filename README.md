@@ -7,8 +7,8 @@
 ## 状态
 
 - **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
-- **当前 npm 版本：`2.0.1`**（packaging fix — `package.json.files` 数组补齐 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md`，2026-05-25）。
-- **`v2.1`（开发中，未发布）**：远程控制 CrabCode 多接入面 —— `serverURL`/`baseURL` Gateway URL 公共契约（见下方小节）、`agentRuns.createRemoteRun` / `agentRuns.streamRemoteControl` + 11 事件 union（见 §Agent Runs → 远程控制）、`chatbridge` 第三方聊天平台桥接类型（types-only 骨架，见 §Chat Bridge）、专用 `remote_control` scope（不进 `allScopes()`）。契约见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。**尚未 npm publish**：本节描述的 API 已在主干实现，发布需走手册 §9 流程升 version + tag。
+- **当前 npm 版本：`2.1.0`**（远程控制 CrabCode 多接入面，2026-05-28）。
+- **`v2.1.0`（已发布）**：远程控制 CrabCode 多接入面 —— `serverURL`/`baseURL` Gateway URL 公共契约（见下方小节）、`agentRuns.createRemoteRun` / `agentRuns.streamRemoteControl` + 11 事件 union（见 §Agent Runs → 远程控制）、`chatbridge` 第三方聊天平台桥接类型（types-only 骨架，见 §Chat Bridge）、专用 `remote_control` scope（不进 `allScopes()`）。契约见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。
 - **v2.0.0 BREAKING（Phase 3 复核 + 全量根治，2026-05-25）摘要**：
   - SDK 同步主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。
   - 新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师 / 企业 OWNER 自查端点（纯增量）。
@@ -241,7 +241,7 @@ await client.agentRuns.cancel(run.runId); // safe to call from UI cancel buttons
 | `error` | 失败事件（`throwOnError:true` 默认会转 `AgentRunStreamError` 抛出） | `error.code`、`error.message`、`error.stage`、`error.retryable` |
 | `done` | 流终止 | `runId`、`status` |
 
-### 远程控制 — CrabCode remote-control（v2.1 开发中）
+### 远程控制 — CrabCode remote-control（v2.1.0）
 
 远程控制是 Agent Run 的一个独立 runtime（`runtime: 'crabcode_remote'`），用于把 CrabCode 子进程的会话/工具/权限循环经服务端适配成 C 端可消费的事件流。它**不复用** `agentRuns.stream` 的旧事件 union，事件协议另成一套（契约 §4 的 11 事件）。
 
@@ -290,7 +290,7 @@ await client.agentRuns.cancel(run.runId); // UI 中止走服务端 cancel contro
 - **11 事件 union**（`RemoteControlEvent`，契约 §4）：`text_delta` / `reasoning_delta` / `tool_call` / `tool_result` / `permission_request` / `permission_result` / `usage` / `settle` / `status` / `error` / `done`。`error` **恒为非终结**（终结性错误由 `done.reason`/`done.finalStatus` 承载），`done` / `settle` 才终结流——故 `streamRemoteControl` 不接受 options、从不抛异常；用 `isTerminalRemoteEvent(ev)` 判终结。
 - **辅助导出**：`parseRemoteControlEvent` / `isTerminalRemoteEvent` / `AdapterKind` / `RunnerKind` / `RemoteControlEvent` / `RemoteSessionPlacement` / `PermissionPolicy` / `WorkspacePolicy`（`src/agent-runs/remote-control.ts`）。
 
-## Chat Bridge（第三方聊天平台桥接，v2.1 开发中 · types-only 骨架）
+## Chat Bridge（第三方聊天平台桥接，v2.1.0 · types-only 骨架，无 client 方法，Phase 7B 后端落地）
 
 `chatbridge` 从根入口导出第三方聊天平台（飞书/企微/钉钉/Slack/Teams/Telegram/WhatsApp）接入 Acosmi 远控的**稳定类型契约**。Phase 7 仅交付类型骨架：**SDK 暂无 `client.chatBridge.*` 方法**，平台 webhook/凭证/桥接 handler 是 Phase 7B 后端工作；平台 SDK 依赖留在独立 adapter 包，不进主包。
 
@@ -861,8 +861,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.1 | **开发中（未发布）** | **远程控制 CrabCode 多接入面**。`serverURL`/`baseURL`/`baseUrl` Gateway URL 公共契约 + `normalizeGatewayBaseURL`（仅 http/https，拒 ws/wss）；`agentRuns.createRemoteRun` / `streamRemoteControl` + 11 事件 `RemoteControlEvent` union + `parseRemoteControlEvent` / `isTerminalRemoteEvent`；`AdapterKind`(6) / `RunnerKind`(3) / `PermissionPolicy` / `WorkspacePolicy`；专用 `remote_control` scope（不进 `allScopes()`，`remoteControlScopes()`）；`chatbridge` 第三方聊天平台类型骨架（types-only，无 client 方法）。wire 约定按平面分（远控 snake_case + 毫秒整数 / chatbridge camelCase，契约 §12-§14）。**尚未 npm publish**。 |
-| 2.0.1 | **当前稳定版（npm latest）** | **Packaging fix — 纯发布元数据，无源码改动**。`package.json.files` 数组补 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md` 两项，让 v2.0.0 引入的 PII 角色矩阵与开发手册随 npm tarball 一并下发。从 v2.0.0 升级到 v2.0.1 无需任何 review。 |
+| 2.1.0 | **当前稳定版（npm latest）** | **远程控制 CrabCode 多接入面（2026-05-28）**。`serverURL`/`baseURL`/`baseUrl` Gateway URL 公共契约 + `normalizeGatewayBaseURL`（仅 http/https，拒 ws/wss）；`agentRuns.createRemoteRun` / `streamRemoteControl` + 11 事件 `RemoteControlEvent` union + `parseRemoteControlEvent` / `isTerminalRemoteEvent`；`AdapterKind`(6) / `RunnerKind`(3) / `PermissionPolicy` / `WorkspacePolicy`；专用 `remote_control` scope（不进 `allScopes()`，`remoteControlScopes()`）；`chatbridge` 第三方聊天平台类型骨架（types-only，无 client 方法，Phase 7B 后端落地）；`subscription.getPlanByCode`。wire 约定按平面分（远控 snake_case + 毫秒整数 / chatbridge camelCase，契约 §12-§14）。公开类型 / 方法签名零移除、零改名（additive minor）。 |
+| 2.0.1 | 稳定版 | **Packaging fix — 纯发布元数据，无源码改动**。`package.json.files` 数组补 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md` 两项，让 v2.0.0 引入的 PII 角色矩阵与开发手册随 npm tarball 一并下发。从 v2.0.0 升级到 v2.0.1 无需任何 review。 |
 | 2.0.0 | **BREAKING** | **Phase 3 复核 + 全量根治（2026-05-25）**。主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。**SDK 同步**：新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师/企业 OWNER 自查端点；`finance/types.ts` P2-016 PII Javadoc 升级（含 `keyVersion` v1/v2 payload 协议）；新建 `docs/pii-role-matrix.md`（4 角色 × 3 PII 级矩阵）；admin 写端点错误码改 HTTP 状态码语义（`200+{ok:false}` → `403/404/501`）。**升级指引详见 §"v2.0.0 升级指引"**。SDK 公开类型 / 方法签名零移除、零改名；BREAKING 范围在网关后端契约。 |
 | 1.9.0 | 稳定版 | **finance 域落地（商品化总规划 P7）**。新增 `client.finance.*`：`listMyInvoices` / `requestInvoice` / `listMyRefunds` / `requestRefund` / `listMyCorporateTransfers` / `initiateCorporateTransfer` / `uploadCorporateTransferProof`（决策 14/15 + R12）。发票 / 退款 / 对公转账三条业务线全量接入；金额一律用 string（json.Number 端口，避免 JS 浮点损失）。 |
 | 1.8.1 | 稳定版 | **enterprise 企业席位域落地（商品化总规划 P6a）**。新增 `client.enterprise.*`：`listMyEnterprises` / `getEnterprise` / `inviteMember` / `listEnterpriseMembers` / `listOrgSubscriptions` / `listSeats` / `assignSeat` / `revokeSeat` / `getOrgConsumeReport`。OWNER/ADMIN 权限下席位月度变更 ≤ 3 次（超出返 41xxx 业务码）；订阅 + 席位 + 用量报表三视图齐备。 |
