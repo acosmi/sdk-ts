@@ -5,6 +5,10 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-05-29 — README 字段名修正（docs-only patch）
+
+纯文档修正，无源码 / 类型 / 方法签名改动。修复 v2.2.0 README「图片/视频生成」示例中把能力字段误写为 camelCase（`supportsImageGeneration`）的问题——`ModelCapabilities` 是 wire snake_case 对象，正确字段为 `capabilities.supports_image_generation` / `supports_video_generation`（`listModels` 对 `capabilities` 对象原样透传，不归一化）。补充说明：这两个字段随 catalog 下发、为可选（缺省按 false）、且**无专用 catalog helper**（需直接读字段筛模型）。从 v2.2.0 升级无需任何 review。
+
 ## [2.2.0] - 2026-05-29 — 托管模型图片/视频生成
 
 Additive minor。公开类型 / 方法签名零移除、零改名。图片/视频生成与文本模型同属托管模型网关（同 `Client`、同 `models:chat` 鉴权面），仅 `capabilities.supports_image_generation` / `supports_video_generation` 的模型可用。计费结算在营销系统，SDK / 网关只负责调用与用量上报。

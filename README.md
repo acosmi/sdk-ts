@@ -122,9 +122,11 @@ if (err) {
 
 ```ts
 const models = await client.listModels();
-const imageModel = models.find((m) => m.capabilities?.supportsImageGeneration);
-const videoModel = models.find((m) => m.capabilities?.supportsVideoGeneration);
+const imageModel = models.find((m) => m.capabilities?.supports_image_generation);
+const videoModel = models.find((m) => m.capabilities?.supports_video_generation);
 ```
+
+> 这两个能力字段随 catalog 下发：`capabilities` 是 `ManagedModel` 的必填字段，`listModels` 对 `capabilities` 对象**原样透传**（保持 wire snake_case，不归一化为 camelCase）。字段为可选——上游未声明时为 `undefined`（按 false 处理），**严禁用模型名 substring 推断**。注意目前**没有**图片/视频生成的专用 catalog helper（不像 `inputModalities` 那条线有 `modelSupportsImageInput` 等），按上面直接读字段筛即可。
 
 ### 图片生成（同步）
 
@@ -433,7 +435,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | ------------ | ------------------------------------------------------------------------------------ |
 | **Client 构造** | `new Client(cfg)`（同步），`Client.create(cfg)`（async；预加载已有 TokenStore）            |
 | **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`, `chatMessages`, `chatMessagesStream`, `buildChatRequest` |
-| **图片 / 视频生成**（v2.2.0+） | `generateImage`（同步）, `generateVideo`（建异步任务）, `pollVideoTask`（轮询）；仅 `capabilities.supportsImageGeneration` / `supportsVideoGeneration` 模型可用 |
+| **图片 / 视频生成**（v2.2.0+） | `generateImage`（同步）, `generateVideo`（建异步任务）, `pollVideoTask`（轮询）；仅 `capabilities.supports_image_generation` / `supports_video_generation` 模型可用 |
 | **Agent Runs** | `agentRuns.create`, `agentRuns.stream`, `agentRuns.run`, `agentRuns.cancel`, `agentRuns.get`, `agentRuns.listArtifacts`, `agentRuns.downloadArtifact`, `agentRuns.submitLocalToolResult`, `agentRuns.runWithLocalTools` |
 | **Agent Runs — 远程控制**（v2.1） | `agentRuns.createRemoteRun`, `agentRuns.streamRemoteControl`；helper：`parseRemoteControlEvent`, `isTerminalRemoteEvent`；scope：`remoteControlScopes()` / `ScopeRemoteControl`（不进 `allScopes()`） |
 | **Chat Bridge**（v2.1 · types-only） | 无 client 方法（Phase 7B 后端落地）；导出类型守卫 `isPlatform`, `isRegion`, `isIntegrationStatus`, `isChannelInboundEvent`, `asCredentialRef` |
@@ -918,7 +920,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.2.0 | **当前稳定版（npm latest）** | **托管模型图片/视频生成（2026-05-29）**。图片/视频生成与文本模型同属托管模型网关（同 `Client`、同 `models:chat` 鉴权面），仅 `capabilities.supports_image_generation` / `supports_video_generation` 的模型可用；计费结算在营销系统，SDK / 网关只负责调用与用量上报。新增 `client.generateImage(modelID, req, signal?)`（同步，`POST /managed-models/:id/images/generations`）/ `client.generateVideo(modelID, req, signal?)`（建异步任务，返回 `taskId`）/ `client.pollVideoTask(modelID, taskID, durationSeconds?, signal?)`（轮询，`durationSeconds` 透传给网关在 `completed` 时上报视频秒数）；新增 `ImageGenerationRequest`/`ImageGenerationResponse`/`VideoGenerationRequest`/`VideoTaskResponse` 类型 + `ModelCapabilities.supportsImageGeneration`/`supportsVideoGeneration` 标志。网关适配 OpenAI 兼容图片 + 火山引擎（即梦/豆包）视频 + DashScope 通义万相（wanx）原生异步任务（图片+视频）。公开类型 / 方法签名零移除、零改名（additive minor）。 |
+| 2.2.1 | **当前稳定版（npm latest）** | **README 字段名修正（docs-only patch，2026-05-29）**。修复 v2.2.0 README 示例把能力字段误写为 camelCase（`supportsImageGeneration`）；正确为 wire snake_case `capabilities.supports_image_generation` / `supports_video_generation`（`listModels` 对 `capabilities` 对象原样透传）。补充：字段随 catalog 下发、可选（缺省 false）、无专用 catalog helper。无源码改动，从 2.2.0 升级无需 review。 |
+| 2.2.0 | 稳定版 | **托管模型图片/视频生成（2026-05-29）**。图片/视频生成与文本模型同属托管模型网关（同 `Client`、同 `models:chat` 鉴权面），仅 `capabilities.supports_image_generation` / `supports_video_generation` 的模型可用；计费结算在营销系统，SDK / 网关只负责调用与用量上报。新增 `client.generateImage(modelID, req, signal?)`（同步，`POST /managed-models/:id/images/generations`）/ `client.generateVideo(modelID, req, signal?)`（建异步任务，返回 `taskId`）/ `client.pollVideoTask(modelID, taskID, durationSeconds?, signal?)`（轮询，`durationSeconds` 透传给网关在 `completed` 时上报视频秒数）；新增 `ImageGenerationRequest`/`ImageGenerationResponse`/`VideoGenerationRequest`/`VideoTaskResponse` 类型 + `ModelCapabilities.supports_image_generation`/`supports_video_generation` 标志（wire snake_case，`capabilities` 对象透传不归一化）。网关适配 OpenAI 兼容图片 + 火山引擎（即梦/豆包）视频 + DashScope 通义万相（wanx）原生异步任务（图片+视频）。公开类型 / 方法签名零移除、零改名（additive minor）。 |
 | 2.1.0 | 稳定版 | **远程控制 CrabCode 多接入面（2026-05-28）**。`serverURL`/`baseURL`/`baseUrl` Gateway URL 公共契约 + `normalizeGatewayBaseURL`（仅 http/https，拒 ws/wss）；`agentRuns.createRemoteRun` / `streamRemoteControl` + 11 事件 `RemoteControlEvent` union + `parseRemoteControlEvent` / `isTerminalRemoteEvent`；`AdapterKind`(6) / `RunnerKind`(3) / `PermissionPolicy` / `WorkspacePolicy`；专用 `remote_control` scope（不进 `allScopes()`，`remoteControlScopes()`）；`chatbridge` 第三方聊天平台类型骨架（types-only，无 client 方法，Phase 7B 后端落地）；`subscription.getPlanByCode`。wire 约定按平面分（远控 snake_case + 毫秒整数 / chatbridge camelCase，契约 §12-§14）。公开类型 / 方法签名零移除、零改名（additive minor）。 |
 | 2.0.1 | 稳定版 | **Packaging fix — 纯发布元数据，无源码改动**。`package.json.files` 数组补 `docs/pii-role-matrix.md` + `docs/开发与发布手册.md` 两项，让 v2.0.0 引入的 PII 角色矩阵与开发手册随 npm tarball 一并下发。从 v2.0.0 升级到 v2.0.1 无需任何 review。 |
 | 2.0.0 | **BREAKING** | **Phase 3 复核 + 全量根治（2026-05-25）**。主仓 9 commit 闭环 20 P0（RBAC 表达式统一 / PII 真落盘加密链 / K7 视频 webhook 幂等 / K8 OCR SSRF / K9 KYC main flow / admin 写端点错误码契约）。**SDK 同步**：新增 `casehall.getMyLawyerCredentialStatus()` + `enterprise.getMyEnterpriseKycStatus()` 律师/企业 OWNER 自查端点；`finance/types.ts` P2-016 PII Javadoc 升级（含 `keyVersion` v1/v2 payload 协议）；新建 `docs/pii-role-matrix.md`（4 角色 × 3 PII 级矩阵）；admin 写端点错误码改 HTTP 状态码语义（`200+{ok:false}` → `403/404/501`）。**升级指引详见 §"v2.0.0 升级指引"**。SDK 公开类型 / 方法签名零移除、零改名；BREAKING 范围在网关后端契约。 |
