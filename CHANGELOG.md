@@ -5,6 +5,23 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-05-29 — 托管模型图片/视频生成
+
+Additive minor。公开类型 / 方法签名零移除、零改名。图片/视频生成与文本模型同属托管模型网关（同 `Client`、同 `models:chat` 鉴权面），仅 `capabilities.supports_image_generation` / `supports_video_generation` 的模型可用。计费结算在营销系统，SDK / 网关只负责调用与用量上报。
+
+### Added
+
+- **`Client.generateImage(modelID, req, signal?)`** — 同步图片生成，`POST /managed-models/:id/images/generations`，返回 `ImageGenerationResponse`（`url` / `b64_json` / `revised_prompt`）。内部超时与 chat 同级（11min）容纳上游耗时。
+- **`Client.generateVideo(modelID, req, signal?)`** — 创建异步视频任务，`POST /managed-models/:id/videos/generations`，返回 `VideoTaskResponse`（含 `taskId`）。
+- **`Client.pollVideoTask(modelID, taskID, durationSeconds?, signal?)`** — 轮询视频任务，`GET /managed-models/:id/videos/tasks/:taskId`；`durationSeconds` 透传给网关在 `completed` 时上报真物理量（视频秒数）。
+- 新类型：`ImageGenerationRequest` / `ImageGenerationResponse` / `VideoGenerationRequest` / `VideoTaskResponse`。
+- `ModelCapabilities` 新增可选 `supports_image_generation?` / `supports_video_generation?`（上游未声明时为 `undefined`，调用方不得用模型名 substring 推断）。
+- `doJSONFullRaw(method, path, body, signal?, timeoutMs?)` 新增可选 `timeoutMs`（默认 30s，向后兼容），图片生成传 chat 同级超时。
+
+### 网关侧适配范围
+
+- OpenAI 兼容图片端点 + 火山引擎（即梦/豆包）视频任务 + **DashScope 通义万相（wanx）原生异步任务 API（图片 + 视频）**。DashScope 万相图片在网关内部建任务并轮询到终态后同步返回 URL（对 SDK 仍是一次 `generateImage`），视频走 `generateVideo` + `pollVideoTask`。
+
 ## [2.1.0] - 2026-05-28 — 远程控制 CrabCode 多接入面
 
 Additive minor。公开类型 / 方法签名零移除、零改名。契约见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。

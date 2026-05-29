@@ -20,6 +20,10 @@ import {
   type SourcesEvent,
   type StreamEvent,
   type StreamSettlement,
+  type ImageGenerationRequest,
+  type ImageGenerationResponse,
+  type VideoGenerationRequest,
+  type VideoTaskResponse,
   parseSettlement,
   parseSourcesEvent,
 } from '../models/types';
@@ -1100,6 +1104,79 @@ export class Client {
     }
   }
 
+  // ===========================================================================
+  // 媒体生成 (v1.3+) — 图片 / 视频生成托管模型 (与 chat 同网关)
+  //
+  // 仅对 capabilities.supports_image_generation / supports_video_generation 的模型有效。
+  // 网关不算钱; 用量由网关上报营销系统结算。
+  // ===========================================================================
+
+  /** 解析 nexus-v4 {code,message,data} 信封, code!=0 抛 BusinessError, 返回 data。 */
+  private unwrapAPIResponse<T>(result: Uint8Array): T {
+    const env = JSON.parse(new TextDecoder().decode(result)) as APIResponse<T>;
+    const bizErr = apiResponseBusinessError(env as unknown as APIResponse<unknown>);
+    if (bizErr) throw bizErr;
+    return env.data;
+  }
+
+  /**
+   * 图片生成 (同步)。POST /managed-models/:id/images/generations
+   *
+   * @param modelID 图片生成托管模型 ID (capabilities.supports_image_generation=true)
+   */
+  async generateImage(
+    modelID: string,
+    req: ImageGenerationRequest,
+    signal?: AbortSignal,
+  ): Promise<ImageGenerationResponse> {
+    const endpoint = `/managed-models/${encodeURIComponent(modelID)}/images/generations`;
+    // 图片生成耗时常超 30s, 用 chat 同级超时 (11min) 容纳上游。
+    const { result } = await this.doJSONFullRaw(
+      'POST',
+      endpoint,
+      req,
+      signal,
+      CHAT_REQUEST_TIMEOUT_MS,
+    );
+    return this.unwrapAPIResponse<ImageGenerationResponse>(result);
+  }
+
+  /**
+   * 创建视频生成任务 (异步)。POST /managed-models/:id/videos/generations
+   * 返回 taskId; 用 pollVideoTask() 轮询直到 status=completed。
+   * 上报真物理量 (视频秒数) 需在 pollVideoTask 时回传 req.duration。
+   *
+   * @param modelID 视频生成托管模型 ID (capabilities.supports_video_generation=true)
+   */
+  async generateVideo(
+    modelID: string,
+    req: VideoGenerationRequest,
+    signal?: AbortSignal,
+  ): Promise<VideoTaskResponse> {
+    const endpoint = `/managed-models/${encodeURIComponent(modelID)}/videos/generations`;
+    const { result } = await this.doJSONFullRaw('POST', endpoint, req, signal);
+    return this.unwrapAPIResponse<VideoTaskResponse>(result);
+  }
+
+  /**
+   * 轮询视频任务状态。GET /managed-models/:id/videos/tasks/:taskId
+   *
+   * @param durationSeconds 创建时的时长 (秒), 透传给网关在 completed 时上报用量。
+   */
+  async pollVideoTask(
+    modelID: string,
+    taskID: string,
+    durationSeconds?: number,
+    signal?: AbortSignal,
+  ): Promise<VideoTaskResponse> {
+    let endpoint = `/managed-models/${encodeURIComponent(modelID)}/videos/tasks/${encodeURIComponent(taskID)}`;
+    if (durationSeconds != null && durationSeconds > 0) {
+      endpoint += `?duration=${encodeURIComponent(String(durationSeconds))}`;
+    }
+    const { result } = await this.doJSONFullRaw('GET', endpoint, null, signal);
+    return this.unwrapAPIResponse<VideoTaskResponse>(result);
+  }
+
   /**
    * Anthropic 原生格式同步聊天
    * v0.5.0: 根据 provider 自动路由
@@ -1565,8 +1642,9 @@ export class Client {
     path: string,
     body: unknown | null,
     signal?: AbortSignal,
+    timeoutMs = 30_000,
   ): Promise<{ result: Uint8Array; headers: Headers }> {
-    return this.doJSONFullRawInternal(method, path, body, signal, false);
+    return this.doJSONFullRawInternal(method, path, body, signal, false, timeoutMs);
   }
 
   private async doJSONFullRawInternal(
@@ -1575,8 +1653,9 @@ export class Client {
     body: unknown | null,
     signal: AbortSignal | undefined,
     retried: boolean,
+    timeoutMs = 30_000,
   ): Promise<{ result: Uint8Array; headers: Headers }> {
-    const ctl = withRequestTimeout(30_000, signal);
+    const ctl = withRequestTimeout(timeoutMs, signal);
     try {
       const token = await this.ensureToken(ctl.signal);
 
@@ -1609,7 +1688,7 @@ export class Client {
             `unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
           );
         }
-        return this.doJSONFullRawInternal(method, path, body, signal, true);
+        return this.doJSONFullRawInternal(method, path, body, signal, true, timeoutMs);
       }
 
       if (resp.status < 200 || resp.status >= 300) {
