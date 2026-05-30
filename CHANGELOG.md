@@ -5,6 +5,19 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-05-30 — `SkillStoreItem.skillMd` 透出（additive type-only patch）
+
+Additive patch，纯类型，无方法签名 / 运行时 / 网关改动。修复**下游经 SDK 拿不到技能 SKILL.md 正文**：网关 `SkillStoreResponse` 早已返回 `skillMd`（`json:"skillMd,omitempty"`，`ToStoreResponse()` 已 map），但 SDK 的 `SkillStoreItem` 类型未声明该字段，导致 `getSkillDetail` / `resolveSkill` / `browseSkills` 的消费方（CrabCode）在类型层访问不到正文。
+
+### Changed
+
+- **`SkillStoreItem` 新增可选 `skillMd?: string`** —Anthropic SKILL.md 正文。声明为可选以匹配网关 `omitempty`（空时字段缺省）。仅全量响应（Detail / resolve / 非 minimal browse）携带；`SkillStoreListItem`（`fields=minimal`）**不含**正文，刻意保持 90% 瘦身不变。
+- **`SkillStoreItem.readme` 改为可选 `readme?: string`** — 修正旧的轻微契约不符：网关该字段为 `json:"readme,omitempty"`，空时缺省，原 `readme: string`（required）与运行时不符。
+
+未触碰 `SkillStoreListItem`（minimal 刻意剥正文）。从 v2.2.1 升级无需 review；消费 `skillMd` 时按可选处理（空表示该技能未提供 SKILL.md 正文）。
+
+> 下游生效需在 CrabCode 侧重锁 `@acosmi/sdk-ts@2.2.2` + `bun install --force`（CrabCode CLAUDE.md §2）。SKILL.md 为用户发布的不可信内容，GUI 渲染须 sanitize（禁原始 HTML 注入）并同屏展示 `securityLevel` / `securityScore` / `certificationStatus`。
+
 ## [2.2.1] - 2026-05-29 — README 字段名修正（docs-only patch）
 
 纯文档修正，无源码 / 类型 / 方法签名改动。修复 v2.2.0 README「图片/视频生成」示例中把能力字段误写为 camelCase（`supportsImageGeneration`）的问题——`ModelCapabilities` 是 wire snake_case 对象，正确字段为 `capabilities.supports_image_generation` / `supports_video_generation`（`listModels` 对 `capabilities` 对象原样透传，不归一化）。补充说明：这两个字段随 catalog 下发、为可选（缺省按 false）、且**无专用 catalog helper**（需直接读字段筛模型）。从 v2.2.0 升级无需任何 review。
