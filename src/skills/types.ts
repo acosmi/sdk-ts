@@ -32,7 +32,8 @@ export interface SkillStoreItem {
   scope: string;
   status: string;
   downloadCount: number;
-  readme: string;
+  readme?: string; // 网关 json:"readme,omitempty"，空时缺字段，故可选
+  skillMd?: string; // SKILL.md (Anthropic 标准格式)；网关 json:"skillMd,omitempty"，仅 Detail/resolve/browse 全量返回
   tags: string[];
   author: string;
   publisherId: string;

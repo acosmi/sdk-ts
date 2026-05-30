@@ -5,6 +5,19 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-05-30 — `SkillStoreItem.skillMd?` 透出（additive minor，零回归）
+
+Additive minor，纯类型，无方法签名 / 运行时改动。修复**下游经 SDK 拿不到技能 SKILL.md 正文**：网关 `SkillStoreResponse` 早已返回 `skillMd`（`json:"skillMd,omitempty"`，`ToStoreResponse()` 已 map），但 SDK 的 `SkillStoreItem` 类型未声明该字段，导致 `getSkillDetail` / `resolveSkill` / `browseSkills` 的消费方（CrabCode）在类型层访问不到正文。
+
+### Changed
+
+- **`SkillStoreItem` 新增可选 `skillMd?: string`** — Anthropic SKILL.md 正文。声明为可选以匹配网关 `omitempty`（空时字段缺省）。仅全量响应（Detail / resolve / 非 minimal browse）携带；`SkillStoreListItem`（`fields=minimal`）**不含**正文，刻意保持 90% 瘦身不变。
+- **`SkillStoreItem.readme` 改为可选 `readme?: string`** — 修正旧的轻微契约不符：网关该字段为 `json:"readme,omitempty"`，空时缺省。
+
+未触碰 `SkillStoreListItem`（minimal 刻意剥正文）。从 2.3.x 升级无需 review；消费 `skillMd` 时按可选处理（空表示该技能未提供 SKILL.md 正文，可回退 `readme`）。
+
+> 下游 CrabCode 生效需重锁 `@acosmi/sdk-ts@2.4.0` + `bun install --force`。SKILL.md 为用户发布的不可信内容，GUI 渲染须 sanitize（禁原始 HTML 注入）并同屏展示 `securityLevel` / `securityScore` / `certificationStatus`。
+
 ## [2.3.0] - 2026-05-30 — `apiBaseURL` 可配置网关 base（additive，零回归）
 
 Additive minor。新增一个可选 client 配置项，让浏览器侧 `/api/v4` 网关调用（managed-model / agent-run / **casehall**）可经**同源代理**转发，规避非网关同源域名（如 `sign.zhonglvbao.com`）下 acosmi.com 对带 `Origin` 跨域浏览器请求的 403。
