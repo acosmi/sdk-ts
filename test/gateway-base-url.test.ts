@@ -184,3 +184,52 @@ describe('apiURL — single normalized base feeds agent-runs / managed-model / n
     expect(b.apiURL('/foo')).toBe('https://b.example/api/v4/foo');
   });
 });
+
+describe('Client.apiBaseURL — v2.3.0 同源代理 base 覆盖 (casehall 跨域 403 根因)', () => {
+  it('unset apiBaseURL — apiURL falls back to serverURL (零回归)', () => {
+    const c = new Client({ baseURL: 'https://gw.example' });
+    expect(c.apiBaseURL).toBeNull();
+    expect(c.apiURL('/api/casehall/lawyer-credentials/my')).toBe(
+      'https://gw.example/api/v4/api/casehall/lawyer-credentials/my',
+    );
+  });
+
+  it('apiBaseURL overrides the gateway base for apiURL() (serverURL untouched)', () => {
+    const c = new Client({
+      serverURL: 'https://acosmi.com',
+      apiBaseURL: 'https://sign.zhonglvbao.com',
+    });
+    // serverURL (OAuth discover / compliance default) stays at the real gateway.
+    expect(c.serverURL).toBe('https://acosmi.com');
+    expect(c.complianceURL('/compliance/foo')).toBe(
+      'https://acosmi.com/admin-api/compliance/foo',
+    );
+    // /api/v4 gateway calls (casehall) now route to the same-origin proxy base.
+    expect(c.apiURL('/api/casehall/lawyer-credentials/my')).toBe(
+      'https://sign.zhonglvbao.com/api/v4/api/casehall/lawyer-credentials/my',
+    );
+  });
+
+  it('apiBaseURL trims trailing slashes (mirrors complianceBaseURL)', () => {
+    const c = new Client({ apiBaseURL: 'https://sign.zhonglvbao.com///' });
+    expect(c.apiBaseURL).toBe('https://sign.zhonglvbao.com');
+    expect(c.apiURL('/foo')).toBe('https://sign.zhonglvbao.com/api/v4/foo');
+  });
+
+  it('apiBaseURL already ending in /api/v4 is not double-appended', () => {
+    const c = new Client({ apiBaseURL: 'https://sign.zhonglvbao.com/api/v4/' });
+    expect(c.apiURL('/foo')).toBe('https://sign.zhonglvbao.com/api/v4/foo');
+  });
+
+  it('apiBaseURL is independent of complianceBaseURL (orthogonal overrides)', () => {
+    const c = new Client({
+      serverURL: 'https://acosmi.com',
+      apiBaseURL: 'https://sign.zhonglvbao.com',
+      complianceBaseURL: 'https://sign.zhonglvbao.com/admin-api',
+    });
+    expect(c.apiURL('/foo')).toBe('https://sign.zhonglvbao.com/api/v4/foo');
+    expect(c.complianceURL('/compliance/bar')).toBe(
+      'https://sign.zhonglvbao.com/admin-api/compliance/bar',
+    );
+  });
+});

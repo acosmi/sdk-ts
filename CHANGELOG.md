@@ -5,6 +5,22 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-05-30 — `apiBaseURL` 可配置网关 base（additive，零回归）
+
+Additive minor。新增一个可选 client 配置项，让浏览器侧 `/api/v4` 网关调用（managed-model / agent-run / **casehall**）可经**同源代理**转发，规避非网关同源域名（如 `sign.zhonglvbao.com`）下 acosmi.com 对带 `Origin` 跨域浏览器请求的 403。
+
+### Added
+
+- **`ClientConfig.apiBaseURL?: string`** — `/api/v4` 网关调用的 base 覆盖。未配置时 `apiURL()` 仍用 `serverURL`（**既有行为逐字节不变**，全部既有消费方 tk-dist-web / acosmi-web / CrabCode / 桌面不受影响）。与 `complianceBaseURL` 同构（compliance 走 `/admin-api`，本字段走 `/api/v4`），尾随 `/` 自动 trim，`apiURL()` 仍按需追加 `/api/v4` 不重复。
+
+### 用法（浏览器经同源代理接 casehall，规避跨域 403）
+
+1. 部署域名 nginx 加 `location /api/v4/ { proxy_pass https://acosmi.com/api/v4/; proxy_set_header Host acosmi.com; proxy_set_header Origin ""; proxy_set_header Authorization $http_authorization; }`（**仅 `/api/v4/`，不要用 `/api/`**——否则会劫持应用自身的 `/api/*` Route Handler）。
+2. **浏览器端** client 配 `apiBaseURL: window.location.origin`。同源 GET 无 `Origin` 头 → nginx 服务端转发 acosmi.com → 不触跨域 403。
+3. **服务端**（Route Handler）client **不设**本字段，直连 `serverURL`（服务端到 acosmi.com 无跨域）。
+
+从 v2.2.x 升级无需任何 review：不传 `apiBaseURL` 即维持原状。
+
 ## [2.2.1] - 2026-05-29 — README 字段名修正（docs-only patch）
 
 纯文档修正，无源码 / 类型 / 方法签名改动。修复 v2.2.0 README「图片/视频生成」示例中把能力字段误写为 camelCase（`supportsImageGeneration`）的问题——`ModelCapabilities` 是 wire snake_case 对象，正确字段为 `capabilities.supports_image_generation` / `supports_video_generation`（`listModels` 对 `capabilities` 对象原样透传，不归一化）。补充说明：这两个字段随 catalog 下发、为可选（缺省按 false）、且**无专用 catalog helper**（需直接读字段筛模型）。从 v2.2.0 升级无需任何 review。

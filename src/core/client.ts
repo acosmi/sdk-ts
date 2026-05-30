@@ -240,6 +240,24 @@ export interface Config {
   complianceBaseURL?: string;
 
   /**
+   * `/api/v4` 网关调用 (managed-model / agent-run / casehall 等) 的 base 覆盖。
+   *
+   * 未配置时默认 = `serverURL`（既有行为，所有既有消费方不受影响）。
+   *
+   * 用途：浏览器部署在**非网关同源**域名（如 sign.zhonglvbao.com）时，网关
+   * acosmi.com 对带 `Origin` 头的跨域浏览器请求返 403（CORS 收紧）。把本字段设为
+   * 同源代理 base（如 `window.location.origin`）、并在该域名 nginx 加
+   * `location /api/v4/ { proxy_pass https://acosmi.com/api/v4/; proxy_set_header Origin ""; }`
+   * 服务端转发，即可让浏览器侧 casehall / 网关调用走同源 → nginx 服务端转发 →
+   * 规避跨域 403。仅设在**浏览器端** client；服务端 (Route Handler) client 不设本字段，
+   * 直连 `serverURL` 即可（服务端到 acosmi.com 无跨域）。
+   *
+   * 与 `complianceBaseURL` 同构（compliance 走 `/admin-api`，本字段走 `/api/v4`）。
+   * apiURL() 仍按需追加 `/api/v4`，调用方无需手动拼。
+   */
+  apiBaseURL?: string;
+
+  /**
    * OAuth metadata profile — 决定 `ensureToken` 刷新 token 时
    * 发现 metadata 走哪个 well-known 端点。
    *
@@ -331,6 +349,8 @@ export class Client {
   serverURL: string;
   /** Compliance API 根地址 (已 trim 尾随 /); null = 走默认 ${serverURL}/admin-api */
   complianceBaseURL: string | null;
+  /** `/api/v4` 网关调用 base 覆盖 (已 trim 尾随 /); null = 走默认 serverURL */
+  apiBaseURL: string | null;
   /** OAuth metadata profile — 刷新 token 时发现 metadata 用 (默认 'desktop') */
   oauthMetadataProfile: OAuthMetadataProfile;
   /** Browser Web OAuth refresh strategy (default 'direct') */
@@ -384,6 +404,7 @@ export class Client {
     this.complianceBaseURL = cfg.complianceBaseURL
       ? cfg.complianceBaseURL.replace(/\/+$/, '')
       : null;
+    this.apiBaseURL = cfg.apiBaseURL ? cfg.apiBaseURL.replace(/\/+$/, '') : null;
     this.oauthMetadataProfile = cfg.oauthMetadataProfile ?? 'desktop';
     this.browserRefreshMode = cfg.browserRefreshMode ?? 'direct';
     this.refreshProxyURL = cfg.refreshProxyURL ?? null;
@@ -1528,7 +1549,8 @@ export class Client {
   // ===========================================================================
 
   apiURL(path: string): string {
-    let base = this.serverURL;
+    // apiBaseURL 覆盖 (未配置时 === serverURL, 既有行为零变化)。
+    let base = this.apiBaseURL ?? this.serverURL;
     if (!base.endsWith('/api/v4')) {
       base += '/api/v4';
     }
