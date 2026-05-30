@@ -5,7 +5,9 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.2] - 2026-05-30 — `SkillStoreItem.skillMd` 透出（additive type-only patch）
+## [2.3.1] - 2026-05-30 — `SkillStoreItem.skillMd` 透出（additive type-only patch）
+
+> 版本订正：本 additive type-only 补丁原以 `2.2.2` 记录，但 npm 已发布 `2.3.0`（`apiBaseURL`，见下），`2.2.2` 从未发布。故本补丁顺延为 `2.3.1`（叠加在 `2.3.0` 之上），仓库源与已发布版本归一。
 
 Additive patch，纯类型，无方法签名 / 运行时 / 网关改动。修复**下游经 SDK 拿不到技能 SKILL.md 正文**：网关 `SkillStoreResponse` 早已返回 `skillMd`（`json:"skillMd,omitempty"`，`ToStoreResponse()` 已 map），但 SDK 的 `SkillStoreItem` 类型未声明该字段，导致 `getSkillDetail` / `resolveSkill` / `browseSkills` 的消费方（CrabCode）在类型层访问不到正文。
 
@@ -14,9 +16,27 @@ Additive patch，纯类型，无方法签名 / 运行时 / 网关改动。修复
 - **`SkillStoreItem` 新增可选 `skillMd?: string`** —Anthropic SKILL.md 正文。声明为可选以匹配网关 `omitempty`（空时字段缺省）。仅全量响应（Detail / resolve / 非 minimal browse）携带；`SkillStoreListItem`（`fields=minimal`）**不含**正文，刻意保持 90% 瘦身不变。
 - **`SkillStoreItem.readme` 改为可选 `readme?: string`** — 修正旧的轻微契约不符：网关该字段为 `json:"readme,omitempty"`，空时缺省，原 `readme: string`（required）与运行时不符。
 
-未触碰 `SkillStoreListItem`（minimal 刻意剥正文）。从 v2.2.1 升级无需 review；消费 `skillMd` 时按可选处理（空表示该技能未提供 SKILL.md 正文）。
+未触碰 `SkillStoreListItem`（minimal 刻意剥正文）。从 v2.3.0 升级无需 review；消费 `skillMd` 时按可选处理（空表示该技能未提供 SKILL.md 正文）。
 
-> 下游生效需在 CrabCode 侧重锁 `@acosmi/sdk-ts@2.2.2` + `bun install --force`（CrabCode CLAUDE.md §2）。SKILL.md 为用户发布的不可信内容，GUI 渲染须 sanitize（禁原始 HTML 注入）并同屏展示 `securityLevel` / `securityScore` / `certificationStatus`。
+> 下游生效需在 CrabCode 侧重锁 `@acosmi/sdk-ts@2.3.1` + `bun install --force`（CrabCode CLAUDE.md §2）。SKILL.md 为用户发布的不可信内容，GUI 渲染须 sanitize（禁原始 HTML 注入）并同屏展示 `securityLevel` / `securityScore` / `certificationStatus`。
+
+## [2.3.0] - 2026-05-30 — `apiBaseURL` 可配置网关 base（additive，零回归）
+
+> 来源订正：`2.3.0` 已发布到 npm（含 `apiBaseURL`），但其**源未提交进 monorepo**（仅 dist 在 npm）。本条按已发布行为补回源（`apiBaseURL` 严格对标 `complianceBaseURL` 同构实现），使仓库源 = 已发布 `2.3.0`。
+
+Additive minor。新增一个可选 client 配置项，让浏览器侧 `/api/v4` 网关调用（managed-model / agent-run / **casehall**）可经**同源代理**转发，规避非网关同源域名（如 `sign.zhonglvbao.com`）下 acosmi.com 对带 `Origin` 跨域浏览器请求的 403。
+
+### Added
+
+- **`ClientConfig.apiBaseURL?: string`** — `/api/v4` 网关调用的 base 覆盖。未配置时 `apiURL()` 仍用 `serverURL`（**既有行为逐字节不变**，全部既有消费方 tk-dist-web / acosmi-web / CrabCode / 桌面不受影响）。与 `complianceBaseURL` 同构（compliance 走 `/admin-api`，本字段走 `/api/v4`），尾随 `/` 自动 trim，`apiURL()` 仍按需追加 `/api/v4` 不重复。
+
+### 用法（浏览器经同源代理接 casehall，规避跨域 403）
+
+1. 部署域名 nginx 加 `location /api/v4/ { proxy_pass https://acosmi.com/api/v4/; proxy_set_header Host acosmi.com; proxy_set_header Origin ""; proxy_set_header Authorization $http_authorization; }`（**仅 `/api/v4/`，不要用 `/api/`**——否则会劫持应用自身的 `/api/*` Route Handler）。
+2. **浏览器端** client 配 `apiBaseURL: window.location.origin`。同源 GET 无 `Origin` 头 → nginx 服务端转发 acosmi.com → 不触跨域 403。
+3. **服务端**（Route Handler）client **不设**本字段，直连 `serverURL`（服务端到 acosmi.com 无跨域）。
+
+从 v2.2.x 升级无需任何 review：不传 `apiBaseURL` 即维持原状。
 
 ## [2.2.1] - 2026-05-29 — README 字段名修正（docs-only patch）
 

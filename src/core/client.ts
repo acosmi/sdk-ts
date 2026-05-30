@@ -240,6 +240,19 @@ export interface Config {
   complianceBaseURL?: string;
 
   /**
+   * `/api/v4` 网关调用 (managed-model / agent-run / casehall) 的 base 覆盖。
+   *
+   * 未配置时 `apiURL()` 仍用 `serverURL`（**既有行为逐字节不变**）。与 `complianceBaseURL`
+   * 同构：compliance 走 `/admin-api`，本字段走 `/api/v4`。尾随 `/` 自动 trim，`apiURL()`
+   * 仍按需追加 `/api/v4` 不重复。
+   *
+   * 典型用途：浏览器在非网关同源域名（如 `sign.zhonglvbao.com`）下经**同源代理**转发
+   * `/api/v4`，规避 acosmi.com 对带 `Origin` 跨域浏览器请求的 403 —— 浏览器端配
+   * `apiBaseURL: window.location.origin`，服务端 (Route Handler) 不设此字段直连 `serverURL`。
+   */
+  apiBaseURL?: string;
+
+  /**
    * OAuth metadata profile — 决定 `ensureToken` 刷新 token 时
    * 发现 metadata 走哪个 well-known 端点。
    *
@@ -331,6 +344,8 @@ export class Client {
   serverURL: string;
   /** Compliance API 根地址 (已 trim 尾随 /); null = 走默认 ${serverURL}/admin-api */
   complianceBaseURL: string | null;
+  /** /api/v4 网关 base 覆盖 (已 trim 尾随 /); null = 走 serverURL (既有行为) */
+  apiBaseURL: string | null;
   /** OAuth metadata profile — 刷新 token 时发现 metadata 用 (默认 'desktop') */
   oauthMetadataProfile: OAuthMetadataProfile;
   /** Browser Web OAuth refresh strategy (default 'direct') */
@@ -383,6 +398,9 @@ export class Client {
     this.serverURL = picked ?? DEFAULT_GATEWAY_BASE_URL;
     this.complianceBaseURL = cfg.complianceBaseURL
       ? cfg.complianceBaseURL.replace(/\/+$/, '')
+      : null;
+    this.apiBaseURL = cfg.apiBaseURL
+      ? cfg.apiBaseURL.replace(/\/+$/, '')
       : null;
     this.oauthMetadataProfile = cfg.oauthMetadataProfile ?? 'desktop';
     this.browserRefreshMode = cfg.browserRefreshMode ?? 'direct';
@@ -1528,7 +1546,8 @@ export class Client {
   // ===========================================================================
 
   apiURL(path: string): string {
-    let base = this.serverURL;
+    // apiBaseURL 已配置时覆盖 (同源代理场景); 未配置时回落 serverURL (既有行为逐字节不变)。
+    let base = this.apiBaseURL ?? this.serverURL;
     if (!base.endsWith('/api/v4')) {
       base += '/api/v4';
     }
