@@ -183,7 +183,19 @@ export class FileTokenStore implements TokenStore {
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       const tmp = `${p}.tmp.${process.pid}.${Date.now()}.${Math.floor(Math.random() * 1e6)}`;
       const data = JSON.stringify(tokens, null, 2);
-      await fs.writeFile(tmp, data, { encoding: 'utf8', mode: 0o600 });
+
+      // 1) 写 tmp + fsync 文件: 内容真正落盘 (writeFile 仅写入 page cache, 进程/机器
+      //    崩溃时 rename 后可能得到 0 字节或旧内容). 注释承诺 "fsync 后 rename", 这里兑现。
+      {
+        const fh = await fs.open(tmp, 'w', 0o600);
+        try {
+          await fh.writeFile(data, { encoding: 'utf8' });
+          await fh.sync(); // fsync — 文件内容 durable
+        } finally {
+          await fh.close();
+        }
+      }
+
       try {
         await fs.rename(tmp, p);
       } catch (e) {
@@ -194,6 +206,21 @@ export class FileTokenStore implements TokenStore {
           // ignore
         }
         throw e;
+      }
+
+      // 2) 对目录 fsync: 让 rename 产生的目录项 (新文件名 → inode 的绑定) durable,
+      //    否则崩溃后目录项可能丢失。跨平台: Windows / 部分 FS 上对目录 open/fsync 会抛
+      //    (EISDIR/EPERM/ENOTSUP), 这是平台不支持目录 fsync, 不应让 save 失败 —— 文件内容
+      //    已 fsync, 目录项 durability 退化为依赖 OS, 与原 atomic rename 语义一致。
+      try {
+        const dirHandle = await fs.open(dir, 'r');
+        try {
+          await dirHandle.sync();
+        } finally {
+          await dirHandle.close();
+        }
+      } catch {
+        // 平台不支持对目录 fsync — 吞掉, 不影响 save 成功。
       }
     });
   }

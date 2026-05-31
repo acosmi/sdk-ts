@@ -1145,11 +1145,12 @@ export class Client {
    * v0.5.0: 根据 provider 自动路由到 /anthropic 或 /chat 端点
    */
   async chat(modelID: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
-    req.stream = false;
+    // 浅拷贝避免原地 mutate 调用方传入的 req (buildChatRequest 内部 sanitizer 也会改 rawMessages)。
+    const r: ChatRequest = { ...req, stream: false };
     // v1.6.0: 调整为 CHAT_REQUEST_TIMEOUT_MS (11min), 容纳 DeepSeek 等上游"首字节前 10min 保活"窗口。
     const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
-      const { body, adapter } = await this.buildChatRequest(modelID, req, ctl.signal);
+      const { body, adapter } = await this.buildChatRequest(modelID, r, ctl.signal);
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
       const { result, headers } = await this.doJSONFullRaw('POST', endpoint, body, ctl.signal);
 
@@ -1281,11 +1282,12 @@ export class Client {
     adapter: ProviderAdapter,
     signal?: AbortSignal,
   ): Promise<AnthropicResponse> {
-    req.stream = false;
+    // 浅拷贝避免原地 mutate 调用方传入的 req。
+    const r: ChatRequest = { ...req, stream: false };
     const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
       const caps = this.getCachedCapabilities(modelID) ?? zeroModelCapabilities();
-      const body = adapter.buildRequestBody(caps, req);
+      const body = adapter.buildRequestBody(caps, r);
       const data = JSON.stringify(body);
 
       const { result } = await this.doJSONFullRaw(
@@ -1329,11 +1331,12 @@ export class Client {
     adapter: ProviderAdapter,
     signal?: AbortSignal,
   ): Promise<AnthropicResponse> {
-    req.stream = false;
+    // 浅拷贝避免原地 mutate 调用方传入的 req。
+    const r: ChatRequest = { ...req, stream: false };
     const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
       const caps = this.getCachedCapabilities(modelID) ?? zeroModelCapabilities();
-      const body = adapter.buildRequestBody(caps, req);
+      const body = adapter.buildRequestBody(caps, r);
       const data = JSON.stringify(body);
 
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
@@ -1382,8 +1385,9 @@ export class Client {
     signal: AbortSignal | undefined,
     retried: boolean,
   ): AsyncGenerator<StreamEvent, void, void> {
-    req.stream = true;
-    const { body, adapter } = await this.buildChatRequest(modelID, req, signal);
+    // 浅拷贝避免原地 mutate 调用方传入的 req。
+    const r: ChatRequest = { ...req, stream: true };
+    const { body, adapter } = await this.buildChatRequest(modelID, r, signal);
     const token = await this.ensureToken(signal);
 
     const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
@@ -1467,8 +1471,9 @@ export class Client {
     signal: AbortSignal | undefined,
     retried: boolean,
   ): AsyncGenerator<StreamEvent, void, void> {
-    req.stream = true;
-    const { body, adapter } = await this.buildChatRequest(modelID, req, signal);
+    // 浅拷贝避免原地 mutate 调用方传入的 req。
+    const r: ChatRequest = { ...req, stream: true };
+    const { body, adapter } = await this.buildChatRequest(modelID, r, signal);
     const token = await this.ensureToken(signal);
 
     const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;

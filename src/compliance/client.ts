@@ -1223,15 +1223,22 @@ export class ComplianceClient {
 
     while (Date.now() < deadline) {
       if (opts.signal?.aborted) {
-        throw new CompliancePollError('compliance poll aborted', 'unknown');
+        // 中途 abort: 带上已观测到的最后状态 (若有), 便于排障定位停在哪一步。
+        throw new CompliancePollError(
+          'compliance poll aborted',
+          'unknown',
+          deriveLastInfo(lastValue, false),
+        );
       }
       lastValue = await fetcher();
       const decision = classify(lastValue);
       if (decision === 'done') return lastValue;
       if (decision === 'failed') {
+        // 终态失败: 把最后一次轮询到的状态视图作为 lastInfo 带出 (terminal=true)。
         throw new CompliancePollError(
           'compliance poll observed terminal failure',
           'terminal_failure',
+          deriveLastInfo(lastValue, true),
         );
       }
       // decision === 'continue' → wait then retry
@@ -1240,8 +1247,51 @@ export class ComplianceClient {
       await sleep(sleepMs, opts.signal);
       interval = Math.min(Math.floor(interval * cfg.multiplier), cfg.maxIntervalMs);
     }
-    throw new CompliancePollError('compliance poll timed out', 'timeout');
+    // 超时: 带上最后一次轮询到的 (非终态) 状态, 让调用方知道卡在哪个 status。
+    throw new CompliancePollError(
+      'compliance poll timed out',
+      'timeout',
+      deriveLastInfo(lastValue, false),
+    );
   }
+}
+
+/**
+ * 从最后一次轮询到的状态视图派生 {@link ComplianceErrorInfo}, 供 CompliancePollError 携带最后状态。
+ *
+ * 轮询返回的是状态视图 (TimestampToken / ProviderRequestStatusView 等) 而非 ComplianceErrorInfo,
+ * 故这里做 best-effort 字段探测: 优先取常见状态字段 (status / verificationStatus) 作为可读 message,
+ * 并在状态视图内联携带服务端 errorCode / errorMessage 时映射进 code / message。
+ * 拿不到任何状态 (lastValue 为 undefined, 即首次 fetch 前就 abort) 时返回 undefined。
+ *
+ * 不伪造 numeric error code (默认 0) — 这是"最后状态"诊断载体, 非真实错误码分类。
+ */
+function deriveLastInfo(value: unknown, terminal: boolean): ComplianceErrorInfo | undefined {
+  if (value == null || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+
+  const statusStr =
+    (typeof v['status'] === 'string' && v['status']) ||
+    (typeof v['verificationStatus'] === 'string' && v['verificationStatus']) ||
+    '';
+
+  const rawCode = v['errorCode'] ?? v['code'];
+  const code = typeof rawCode === 'number' ? rawCode : 0;
+
+  const rawMsg = v['errorMessage'] ?? v['message'];
+  const message =
+    (typeof rawMsg === 'string' && rawMsg) ||
+    (statusStr ? `last polled status: ${statusStr}` : '') ||
+    'compliance poll: last observed status (no detail)';
+
+  return {
+    code,
+    message,
+    key: 'UNKNOWN_COMPLIANCE_ERROR',
+    retryable: false,
+    terminal,
+    stepUpRequired: false,
+  };
 }
 
 type PollDecision = 'continue' | 'done' | 'failed';

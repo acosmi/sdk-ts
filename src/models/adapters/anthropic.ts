@@ -18,6 +18,19 @@ import { BusinessError } from '../../shared/errors';
 import { buildBetas } from '../betas';
 import { ProviderFormat, type ProviderAdapter } from './index';
 
+/**
+ * SDK 在 buildRequestBody 中写入并管理的请求体字段 (精确 body key)。
+ * extraBody 中若出现同名 key 会覆盖 SDK 计算结果 (如 Level 模式下的 thinking/effort/max_tokens、
+ * 自动组装的 betas、被刻意删除的 temperature), 故透传时强制跳过这些 key。
+ */
+const ANTHROPIC_SDK_MANAGED_BODY_KEYS: ReadonlySet<string> = new Set([
+  'thinking',
+  'effort',
+  'max_tokens',
+  'temperature',
+  'betas',
+]);
+
 /** 实现 ProviderAdapter, 用于 Anthropic 原生模型 */
 export class AnthropicAdapter implements ProviderAdapter {
   format(): ProviderFormat {
@@ -129,10 +142,17 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     // ── 透传 extraBody ──
     // 注意: extraBody 在 resolveThinkingLevel 之后执行，
-    // Level 模式下 thinking / effort / max_tokens / temperature 已由 SDK 管理，
-    // extraBody 中不应包含这些 key, 否则会覆盖 SDK 计算结果
+    // Level 模式下 thinking / effort / max_tokens / temperature / betas 已由 SDK 管理，
+    // extraBody 中若含这些 key 会覆盖 SDK 计算结果 — 强制跳过并告警，
+    // 但保留 extraBody 透传其它 (非管理) 字段的正当能力。
     if (req.extraBody) {
       for (const [k, v] of Object.entries(req.extraBody)) {
+        if (ANTHROPIC_SDK_MANAGED_BODY_KEYS.has(k)) {
+          console.warn(
+            `acosmi-sdk: extraBody key "${k}" is SDK-managed and was ignored (use the dedicated request field instead).`,
+          );
+          continue;
+        }
         body[k] = v;
       }
     }
