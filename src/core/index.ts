@@ -5,14 +5,17 @@
 // === Client + 业务 mixins 宿主 ===
 export {
   Client,
+  DEFAULT_API_TIMEOUT_MS,
   DEFAULT_GATEWAY_BASE_URL,
   ErrOAuthCORSBlocked,
   ErrRefreshProxyFailed,
   ErrTokenExpired,
   normalizeGatewayBaseURL,
+  normalizeOverrideBaseURL,
   type BrowserRefreshMode,
   type Config,
   type FilterStatus,
+  type ReqTimeoutCtl,
 } from './client';
 export {
   FilterStatusOK,

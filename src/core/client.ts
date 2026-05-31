@@ -156,6 +156,49 @@ export function normalizeGatewayBaseURL(input: unknown): string {
 }
 
 /**
+ * normalizeOverrideBaseURL — 校验并归一化 override base URL (complianceBaseURL / apiBaseURL)。
+ *
+ * 与 `normalizeGatewayBaseURL` 同级的健壮性校验, 但用于 compliance / 开放 API 的同源直连 base:
+ *   1. 必须是 string 且非空。
+ *   2. 必须可被 `new URL()` 解析, 且协议为 `http:` / `https:` (ws/wss 不允许)。
+ *   3. host 必须非空; 不允许 query / hash (override base 不带 query)。
+ *   4. 返回值去尾随 `/` (origin + pathname)。
+ *
+ * 注意: helper 只校验 base URL 合法性, 不强加路径后缀 — compliance 走 `/admin-api`、
+ * apiBaseURL 走 `/api/v4` 都由各自 `complianceURL()` / `apiURL()` 在 base 之上追加,
+ * base 本身不含这些子路径。
+ *
+ * @param raw   原始配置值
+ * @param label 出错信息里的字段名 (如 'complianceBaseURL')
+ */
+export function normalizeOverrideBaseURL(raw: string, label: string): string {
+  if (typeof raw !== 'string') {
+    throw new TypeError(`${label} must be a string`);
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${label} is empty`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`${label} is not a valid URL: ${trimmed}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${label} only allows http/https, got ${parsed.protocol} (${trimmed})`);
+  }
+  if (!parsed.host) {
+    throw new Error(`${label} has empty host: ${trimmed}`);
+  }
+  if (parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new Error(`${label} must not contain query or hash: ${trimmed}`);
+  }
+  const path = parsed.pathname.replace(/\/+$/, '');
+  return path ? `${parsed.origin}${path}` : parsed.origin;
+}
+
+/**
  * pickAndNormalizeGatewayURL — Config 中三个 alias (serverURL/baseURL/baseUrl)
  * 取唯一规范值。多字段同时传入且 normalize 后不等时抛错。
  * 未传任一字段返回 `null`，由调用方决定是否填默认值。
@@ -301,6 +344,15 @@ export const ErrTokenExpired = 'token_expired' as const;
  */
 const CHAT_REQUEST_TIMEOUT_MS = 11 * 60 * 1000;
 
+/**
+ * 非流式 JSON API 请求的默认超时 (毫秒)。
+ *
+ * 子 client (agent-runs / compliance) 的同步 JSON 调用未传 signal 时套用此上限,
+ * 避免上游 hang 导致 Promise 永不 settle。流式 (SSE) / 下载等长连接路径**不**套此超时,
+ * 以保留长连接语义。与 core doJSONFullInternal 的 30s 量级一致。
+ */
+export const DEFAULT_API_TIMEOUT_MS = 60_000;
+
 // =============================================================================
 // 内部 Deferred / WS state
 // =============================================================================
@@ -402,9 +454,11 @@ export class Client {
     const picked = pickAndNormalizeGatewayURL(cfg);
     this.serverURL = picked ?? DEFAULT_GATEWAY_BASE_URL;
     this.complianceBaseURL = cfg.complianceBaseURL
-      ? cfg.complianceBaseURL.replace(/\/+$/, '')
+      ? normalizeOverrideBaseURL(cfg.complianceBaseURL, 'complianceBaseURL')
       : null;
-    this.apiBaseURL = cfg.apiBaseURL ? cfg.apiBaseURL.replace(/\/+$/, '') : null;
+    this.apiBaseURL = cfg.apiBaseURL
+      ? normalizeOverrideBaseURL(cfg.apiBaseURL, 'apiBaseURL')
+      : null;
     this.oauthMetadataProfile = cfg.oauthMetadataProfile ?? 'desktop';
     this.browserRefreshMode = cfg.browserRefreshMode ?? 'direct';
     this.refreshProxyURL = cfg.refreshProxyURL ?? null;
@@ -520,7 +574,7 @@ export class Client {
       // 1. 发现
       let meta: ServerMetadata;
       try {
-        meta = await discover(this.serverURL, signal);
+        meta = await discover(this.serverURL, signal, this.fetchImpl);
       } catch (err) {
         emitError(ErrDiscovery, err);
         throw new Error(`discovery failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -531,7 +585,7 @@ export class Client {
       let clientID = this.getCachedClientID();
       if (clientID === '') {
         try {
-          const reg = await register(meta, appName, signal);
+          const reg = await register(meta, appName, signal, this.fetchImpl);
           clientID = reg.client_id;
         } catch (err) {
           emitError(ErrRegistration, err);
@@ -552,7 +606,7 @@ export class Client {
         // 授权失败 (可能是服务器重启后 client_id 失效):
         // 清除缓存的 client_id, 重新注册, 再试一次
         try {
-          const reg = await register(meta, appName, signal);
+          const reg = await register(meta, appName, signal, this.fetchImpl);
           clientID = reg.client_id;
         } catch (regErr) {
           emitError(ErrRegistration, regErr);
@@ -583,6 +637,7 @@ export class Client {
             verifier,
             opts.expiresIn,
             signal,
+            this.fetchImpl,
           );
         } else {
           tokenResp = await exchangeCode(
@@ -592,6 +647,7 @@ export class Client {
             result.redirectURI,
             verifier,
             signal,
+            this.fetchImpl,
           );
         }
       } catch (err) {
@@ -636,19 +692,19 @@ export class Client {
       if (!meta) {
         try {
           // token-lifecycle discovery: revoke 必须打与签发 token 同 profile 的端点
-          meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
+          meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal, this.fetchImpl);
         } catch (e) {
           console.warn(`[acosmi-sdk] warning: discover for revocation failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
       if (meta) {
         try {
-          await revokeToken(meta, tokens.access_token, signal);
+          await revokeToken(meta, tokens.access_token, signal, this.fetchImpl);
         } catch {
           // ignore
         }
         try {
-          await revokeToken(meta, tokens.refresh_token, signal);
+          await revokeToken(meta, tokens.refresh_token, signal, this.fetchImpl);
         } catch {
           // ignore
         }
@@ -768,7 +824,7 @@ export class Client {
     if (this.meta == null) {
       try {
         // token-lifecycle discovery: refresh 必须打与签发 token 同 profile 的端点
-        this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal);
+        this.meta = await discoverWithProfile(this.serverURL, this.oauthMetadataProfile, signal, this.fetchImpl);
       } catch (e) {
         throw new Error(
           `discover for refresh: ${e instanceof Error ? e.message : String(e)}`,
@@ -783,6 +839,7 @@ export class Client {
         this.tokens.client_id,
         this.tokens.refresh_token,
         signal,
+        this.fetchImpl,
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1641,6 +1698,11 @@ export class Client {
       }
 
       const text = await resp.text();
+      // 空 body 的成功响应 (HTTP 204 / 200 空体) — 不要 JSON.parse('') (抛 SyntaxError)。
+      // 按方法返回契约返回 undefined (与 compliance executeJson 一致), 同时跳过业务码检查。
+      if (!text) {
+        return { result: undefined as unknown as T, headers: resp.headers };
+      }
       const result = JSON.parse(text) as T;
       // 业务码检查 (APIResponse.code != 0)
       if (result && typeof result === 'object' && 'code' in result) {
@@ -1775,6 +1837,19 @@ export class Client {
     } finally {
       ctl.dispose();
     }
+  }
+
+  /**
+   * 给子 client (agent-runs / compliance) 用的请求超时组合器。
+   *
+   * 返回一个 controller, 其 `signal` 同时受默认/指定超时与外部 `parent` signal 约束 —
+   * 二者任一触发都会 abort (用户传入的 signal 仍然生效)。调用方**必须**在 finally 里
+   * `dispose()` 清掉定时器与监听, 否则 timer 泄漏。
+   *
+   * 仅用于非流式 JSON 请求; 流式 (SSE) / 下载路径不应套短超时 (会切断长连接)。
+   */
+  withRequestTimeout(ms: number, parent?: AbortSignal): ReqTimeoutCtl {
+    return withRequestTimeout(ms, parent);
   }
 
   /**
@@ -1931,7 +2006,7 @@ function normalizeInputModalities(models: ManagedModel[]): ManagedModel[] {
   return models;
 }
 
-interface ReqTimeoutCtl {
+export interface ReqTimeoutCtl {
   signal: AbortSignal;
   dispose(): void;
 }

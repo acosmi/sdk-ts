@@ -2,7 +2,7 @@
 
 import type { APIResponse } from '../shared/api-response';
 import { apiResponseBusinessError } from '../shared/api-response';
-import { Client } from '../core/client';
+import { Client, DEFAULT_API_TIMEOUT_MS } from '../core/client';
 import {
   iterSSELines,
   maxDownloadSize,
@@ -381,8 +381,16 @@ export class AgentRunsClient {
     signal: AbortSignal | undefined,
     opts: RequestOptions,
   ): Promise<T> {
-    const resp = await this.requestRaw(method, path, body, signal, opts);
+    // 非流式 JSON 请求套默认超时 (调用方可经 opts.timeoutMs 覆盖)。
+    // stream / download 路径直接调 requestRaw 且不带 timeoutMs, 保留长连接语义。
+    const resp = await this.requestRaw(method, path, body, signal, {
+      ...opts,
+      timeoutMs: opts.timeoutMs ?? DEFAULT_API_TIMEOUT_MS,
+    });
     const text = await resp.text();
+    // 空 body 的成功响应 (HTTP 204 / 200 空体) — 不要 JSON.parse('') (抛 SyntaxError)。
+    // 与 core doJSONFullInternal / compliance executeJson 一致, 空响应返回 undefined。
+    if (!text) return undefined as unknown as T;
     const result = JSON.parse(text) as APIResponse<T>;
     const bizErr = apiResponseBusinessError(result);
     if (bizErr) throw bizErr;
@@ -396,6 +404,27 @@ export class AgentRunsClient {
     signal: AbortSignal | undefined,
     opts: RequestOptions,
     retried = false,
+  ): Promise<Response> {
+    // opts.timeoutMs 仅由非流式 JSON 路径 (requestAPI) 设置 — 用组合 signal (超时 + 用户 signal,
+    // 任一触发都 abort) 替换裸 signal; 流式/下载路径不带 timeoutMs, signal 原样透传保留长连接。
+    if (opts.timeoutMs != null && opts.timeoutMs > 0) {
+      const ctl = this.client.withRequestTimeout(opts.timeoutMs, signal);
+      try {
+        return await this.requestRawInner(method, path, body, ctl.signal, opts, retried);
+      } finally {
+        ctl.dispose();
+      }
+    }
+    return this.requestRawInner(method, path, body, signal, opts, retried);
+  }
+
+  private async requestRawInner(
+    method: string,
+    path: string,
+    body: unknown | null,
+    signal: AbortSignal | undefined,
+    opts: RequestOptions,
+    retried: boolean,
   ): Promise<Response> {
     const token = await this.client.ensureToken(signal);
     const url = this.client.apiURL(path);
@@ -416,7 +445,8 @@ export class AgentRunsClient {
         await resp.body?.cancel();
       } catch {}
       await this.client.forceRefresh(signal);
-      return this.requestRaw(method, path, body, signal, opts, true);
+      // 复用同一组合 signal (含剩余超时预算): 直接走 inner, 不再重套超时。
+      return this.requestRawInner(method, path, body, signal, opts, true);
     }
 
     if (resp.status < 200 || resp.status >= 300) {
@@ -430,6 +460,8 @@ export class AgentRunsClient {
 interface RequestOptions {
   retryOn401: boolean;
   accept?: string;
+  /** 非流式 JSON 请求的超时上限 (毫秒); 未设置 = 无超时 (流式/下载路径)。 */
+  timeoutMs?: number;
 }
 
 interface WireAgentRunCreateRequest {

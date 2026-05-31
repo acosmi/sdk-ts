@@ -51,6 +51,13 @@ declare module '@acosmi/sdk-ts' {
 }
 
 Client.prototype.connect = async function (this: Client, cfg: WSConfig, signal?: AbortSignal) {
+  // 幂等化重复 connect: 已有连接/重连 loop 时先优雅断开旧的, 否则旧 wsLoop 的后台
+  // 自动重连定时器会和新连接并存 → 多个 WebSocket + 多个 setTimeout loop 泄漏 (FD + 内存)。
+  // disconnect() 会 abort 旧 ws、关旧 conn、并等待旧读循环退出 (最多 5s)。
+  if (this.ws) {
+    await this.disconnect();
+  }
+
   const noop = () => {};
   const filledCfg: Required<WSConfig> = {
     onEvent: cfg.onEvent ?? noop,
@@ -149,6 +156,11 @@ async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
   // TS 跨端方案: token 放 URL query (?token=) 或 Sec-WebSocket-Protocol 子协议.
   // 此处用 query, 与 Go 端不完全等价 — 服务端需对应支持.
   // 注: Node 22+ ws 模块通常支持 options.headers; 浏览器不支持.
+  //
+  // ⚠️ 安全风险 (D7, 待后续批次): access_token 放在 URL query string 会被反向代理 /
+  // 网关 / 浏览器开发者工具的 access log 明文记录, 存在泄露风险。浏览器原生 WebSocket
+  // 无法传自定义 header, 这是当前跨端约束下的折中方案; 真正修复需服务端支持
+  // Sec-WebSocket-Protocol 子协议携带 token 或短时一次性 ticket。本批不改实现。
   const u = new URL(url);
   u.searchParams.set('token', token);
 

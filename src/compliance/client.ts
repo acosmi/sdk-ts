@@ -14,7 +14,7 @@
 //     → 抛 typed error；总超时后抛 polling timeout（不自动重发原请求）。
 //   - SDK 不传 provider 字段；服务端按配置选择 provider，不再接受调用方指定。
 
-import { Client } from '../core/client';
+import { Client, DEFAULT_API_TIMEOUT_MS } from '../core/client';
 import type { BusinessError } from '../shared/errors';
 import type { APIResponse } from '../shared/api-response';
 import { apiResponseBusinessError } from '../shared/api-response';
@@ -1149,6 +1149,24 @@ export class ComplianceClient {
     opts: { retryOn401: boolean; extraHeaders: Record<string, string> },
     retried = false,
   ): Promise<T> {
+    // 非流式 JSON 请求套默认超时 — 组合 signal (超时 + 用户 signal, 任一触发都 abort),
+    // 避免上游 hang 导致 Promise 永不 settle。compliance 无流式/下载路径, 全部 JSON。
+    const ctl = this.client.withRequestTimeout(DEFAULT_API_TIMEOUT_MS, signal);
+    try {
+      return await this.executeJsonInner<T>(method, path, body, ctl.signal, opts, retried);
+    } finally {
+      ctl.dispose();
+    }
+  }
+
+  private async executeJsonInner<T>(
+    method: string,
+    path: string,
+    body: unknown | null,
+    signal: AbortSignal | undefined,
+    opts: { retryOn401: boolean; extraHeaders: Record<string, string> },
+    retried: boolean,
+  ): Promise<T> {
     const token = await this.client.ensureToken(signal);
     const url = this.client.complianceURL(path);
     const headers: Record<string, string> = {
@@ -1169,7 +1187,8 @@ export class ComplianceClient {
         await resp.body?.cancel();
       } catch { /* ignore */ }
       await this.client.forceRefresh(signal);
-      return this.executeJson<T>(method, path, body, signal, opts, true);
+      // 复用同一组合 signal (含剩余超时预算), 不再重套超时。
+      return this.executeJsonInner<T>(method, path, body, signal, opts, true);
     }
 
     if (resp.status < 200 || resp.status >= 300) {
