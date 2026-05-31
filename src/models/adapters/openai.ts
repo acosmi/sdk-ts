@@ -413,6 +413,9 @@ export class OpenAIStreamConverter {
   private messageStarted = false;
   private thinkingStarted = false;
   private thinkingStopped = false;
+  /** thinking block 打开时占用的 Anthropic block index — 关闭时必须用它, 不能用
+   *  可能已被 text/tool 推进的 this.blockIndex (否则 content_block_stop 索引错配)。 */
+  private thinkingBlockIndex = 0;
   private textStarted = false;
   /** OpenAI tool_call index → Anthropic block index */
   private toolBlockIndex = new Map<number, number>();
@@ -460,6 +463,7 @@ export class OpenAIStreamConverter {
     if (choice.delta.reasoning_content && choice.delta.reasoning_content !== '') {
       if (!this.thinkingStarted) {
         this.thinkingStarted = true;
+        this.thinkingBlockIndex = this.blockIndex; // 记下 thinking 占用的 index
         const blockJSON = JSON.stringify({
           type: 'content_block_start',
           index: this.blockIndex,
@@ -469,7 +473,7 @@ export class OpenAIStreamConverter {
       }
       const deltaJSON = JSON.stringify({
         type: 'content_block_delta',
-        index: this.blockIndex,
+        index: this.thinkingBlockIndex,
         delta: { type: 'thinking_delta', thinking: choice.delta.reasoning_content },
       });
       events.push({ event: 'content_block_delta', data: deltaJSON });
@@ -477,12 +481,12 @@ export class OpenAIStreamConverter {
 
     // text delta (content)
     if (choice.delta.content && choice.delta.content !== '') {
-      // 关闭 thinking block (如果有)
+      // 关闭 thinking block (如果有) — 用 thinkingBlockIndex 关, 不用可能已推进的 blockIndex
       if (this.thinkingStarted && !this.thinkingStopped) {
         this.thinkingStopped = true;
         const stopJSON = JSON.stringify({
           type: 'content_block_stop',
-          index: this.blockIndex,
+          index: this.thinkingBlockIndex,
         });
         events.push({ event: 'content_block_stop', data: stopJSON });
         this.blockIndex++;
@@ -507,6 +511,18 @@ export class OpenAIStreamConverter {
     // tool_calls delta
     for (const tc of choice.delta.tool_calls ?? []) {
       if (!this.toolBlockIndex.has(tc.index)) {
+        // 关闭仍打开的 thinking block (镜像 text 分支): chunk 顺序 reasoning_content →
+        // tool_calls (中间无 content text delta) 时, thinking 仍开着且 blockIndex 未推进,
+        // 若不在此关闭并递增, tool block 会与 thinking 撞 index 0。用 thinkingBlockIndex 关。
+        if (this.thinkingStarted && !this.thinkingStopped) {
+          this.thinkingStopped = true;
+          const stopJSON = JSON.stringify({
+            type: 'content_block_stop',
+            index: this.thinkingBlockIndex,
+          });
+          events.push({ event: 'content_block_stop', data: stopJSON });
+          this.blockIndex++;
+        }
         // 关闭 text block (如果有)
         if (this.textStarted) {
           const stopJSON = JSON.stringify({
@@ -555,9 +571,12 @@ export class OpenAIStreamConverter {
         });
         events.push({ event: 'content_block_stop', data: stopJSON });
       } else if (this.thinkingStarted && !this.thinkingStopped) {
+        // 用 thinkingBlockIndex 关 — thinking-only 流末尾若有 tool block 推进过 blockIndex,
+        // 这里仍要用 thinking 自己打开时记下的 index, 否则错配。
+        this.thinkingStopped = true;
         const stopJSON = JSON.stringify({
           type: 'content_block_stop',
-          index: this.blockIndex,
+          index: this.thinkingBlockIndex,
         });
         events.push({ event: 'content_block_stop', data: stopJSON });
       }

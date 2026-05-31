@@ -26,46 +26,73 @@ declare module '@acosmi/sdk-ts' {
     // 律师库 (C 端公开)
     // =========================================================================
 
-    /** 列出已认证律师 (公开端点, 仅返回 VERIFIED + ACTIVE 状态; PII L3 字段已脱敏). */
+    /**
+     * 列出已认证律师 (公开端点, 仅返回 VERIFIED + ACTIVE 状态; PII L3 字段已脱敏).
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     listLawyers(
       params?: { practiceArea?: string; location?: string; pageNo?: number; pageSize?: number },
       signal?: AbortSignal,
     ): Promise<LawyerSummary[]>;
 
-    /** 获取律师公开详情 (脱敏)。 */
+    /**
+     * 获取律师公开详情 (脱敏)。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     getLawyer(id: number, signal?: AbortSignal): Promise<LawyerSummary>;
 
     // =========================================================================
     // 案件线索 (C 端登录态)
     // =========================================================================
 
-    /** 提交案件线索 (登录态)。 */
+    /**
+     * 提交案件线索 (登录态)。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     submitCaseLead(req: SubmitCaseLeadRequest, signal?: AbortSignal): Promise<{ id: number }>;
 
-    /** 我的案件线索列表。 */
+    /**
+     * 我的案件线索列表。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     listMyCaseLeads(signal?: AbortSignal): Promise<CaseLead[]>;
 
-    /** 我的案件列表 (委托后)。 */
+    /**
+     * 我的案件列表 (委托后)。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     getMyCases(signal?: AbortSignal): Promise<CaseMatter[]>;
 
     // =========================================================================
     // 法律咨询
     // =========================================================================
 
-    /** 预约法律咨询 (skuCode 必填; lawyerId 可选, 留空走 AI 推荐池)。 */
+    /**
+     * 预约法律咨询 (skuCode 必填; lawyerId 可选, 留空走 AI 推荐池)。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     bookConsultation(req: BookConsultationRequest, signal?: AbortSignal): Promise<{ consultationId: number }>;
 
-    /** 我的咨询单列表。 */
+    /**
+     * 我的咨询单列表。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     listMyConsultations(signal?: AbortSignal): Promise<LegalConsultation[]>;
 
     // =========================================================================
     // 法律服务订单 & SKU
     // =========================================================================
 
-    /** 我的法律服务订单列表。 */
+    /**
+     * 我的法律服务订单列表。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     listMyLegalOrders(signal?: AbortSignal): Promise<LegalServiceOrder[]>;
 
-    /** 列出公开的 LEGAL_SERVICE SKU (匿名可调用, 复用 dist_compliance_sku benefit_type='LEGAL_SERVICE')。 */
+    /**
+     * 列出公开的 LEGAL_SERVICE SKU (匿名可调用, 复用 dist_compliance_sku benefit_type='LEGAL_SERVICE')。
+     * @experimental 对应后端 consumer 端点尚未实现 (casehall 模块当前仅 getMyLawyerCredentialStatus 在产); 调用将返回 404。
+     */
     listLegalSKUs(region?: string, signal?: AbortSignal): Promise<LegalServiceSku[]>;
 
     // =========================================================================
