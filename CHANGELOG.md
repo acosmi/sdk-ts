@@ -5,6 +5,15 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-05-31 — 模型 adapter 格式一致性护栏（行为加固 patch，向后兼容）
+
+`getAdapterForModel` 路由加固：`preferred_format` 现仅在**确被 `supported_formats` 收录**时才采信（或 `supported_formats` 未声明时维持原样）。防止上游元数据漂移（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）把 SDK 路由到模型并不支持的格式端点，撞 `/anthropic`「未绑定 Anthropic」4xx。这是网关侧「同 model_id 双 profile 选行」根因修复在 SDK 侧的同构护栏。
+
+### Changed
+
+- **`getAdapterForModel`**：决策顺序第 1 步由「`preferred_format` 非空即采信」收紧为「`preferred_format` 非空**且**该格式在 `supported_formats` 内（或 `supported_formats` 未声明）才采信」。`supported_formats` 为空/未知（旧上游）时行为逐字节不变（仍采信 `preferred_format`，再回落 provider 名硬编码）。新增 3 条 `test/adapters/routing.test.ts` 用例钉死矛盾场景。
+- 升级无需 review：仅当上游同时返回 `preferred_format` 与一个**不含该格式**的 `supported_formats` 时路由结果才改变（此前是错误路由，现纠正）。
+
 ## [2.5.0] - 2026-05-31 — 源码健康度审计根因修复（additive minor，公开 API 零移除/零改名）
 
 逐文件源码 + 文档深度审计后的根因修复。主索引：`docs/audit/TS版SDK源码健康度与文档审计报告.md`（含 §0.5 前置核实修订与 live 生产实证）。**公开类型与方法签名零移除、零改名**；新增导出 `normalizeOverrideBaseURL` / `DEFAULT_API_TIMEOUT_MS` / `OpenAIStreamConverter`。

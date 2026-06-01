@@ -80,7 +80,8 @@ export function getAdapter(provider: string): ProviderAdapter {
  * 按 ManagedModel 的 preferred_format / supported_formats 选择 adapter
  *
  * 决策顺序:
- *  1. preferred_format 非空 → 按其值返回 (anthropic | openai)
+ *  1. preferred_format 非空 **且** 该格式在 supported_formats 内 (或 supported_formats 未声明)
+ *     → 按其值返回 (anthropic | openai)
  *  2. supported_formats 含 "anthropic" → AnthropicAdapter
  *  3. supported_formats 含 "openai" → OpenAIAdapter
  *  4. 两字段均空 (旧上游) → 回落 provider 名硬编码 (原 getAdapter 行为)
@@ -88,16 +89,13 @@ export function getAdapter(provider: string): ProviderAdapter {
  * 这使得 dashscope / zhipu / deepseek 等 provider 的模型如果上游启用了
  * Anthropic 兼容端点, 也能走 /anthropic 路径, 不再被 provider 字符串硬编码到 /chat
  * 导致 tool_reference 400.
+ *
+ * [格式一致性护栏 2026-05-29] preferred_format 仅在确被 supported_formats 收录时才采信:
+ * 防止上游元数据漂移 (preferred_format=anthropic 但 supported_formats=[openai]) 把 SDK
+ * 路由到模型并不支持的格式端点 (撞 /anthropic "未绑定 Anthropic" 4xx)。这是网关侧
+ * "同 model_id 双 profile 选行" 根因修复在 SDK 侧的同构护栏。
  */
 export function getAdapterForModel(m: ManagedModel): ProviderAdapter {
-  const pref = (m.preferred_format ?? '').trim().toLowerCase();
-  switch (pref) {
-    case 'anthropic':
-      return new AnthropicAdapter();
-    case 'openai':
-      return new OpenAIAdapter();
-  }
-
   let hasAnthropic = false;
   let hasOpenAI = false;
   for (const f of m.supported_formats ?? []) {
@@ -110,6 +108,18 @@ export function getAdapterForModel(m: ManagedModel): ProviderAdapter {
         break;
     }
   }
+  const declared = hasAnthropic || hasOpenAI;
+
+  const pref = (m.preferred_format ?? '').trim().toLowerCase();
+  switch (pref) {
+    case 'anthropic':
+      if (!declared || hasAnthropic) return new AnthropicAdapter();
+      break;
+    case 'openai':
+      if (!declared || hasOpenAI) return new OpenAIAdapter();
+      break;
+  }
+
   if (hasAnthropic) return new AnthropicAdapter();
   if (hasOpenAI) return new OpenAIAdapter();
 
