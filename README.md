@@ -7,7 +7,8 @@
 ## 状态
 
 - **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
-- **当前 npm 版本：`2.5.0`**（源码健康度审计根因修复，2026-05-31）。
+- **当前 npm 版本：`2.5.1`**（模型 adapter 格式一致性护栏，2026-05-31）。
+- **`v2.5.1`（格式一致性护栏，2026-05-31）**：`getAdapterForModel` 路由加固 —— `preferred_format` 现仅在**确被 `supported_formats` 收录**时才采信（或 `supported_formats` 未声明时维持原样）。防止上游元数据漂移（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）把 SDK 路由到模型并不支持的格式端点，撞 `/anthropic`「未绑定 Anthropic」4xx。`supported_formats` 为空/未知（旧上游）时**行为逐字节不变**。新增 3 条 routing 用例钉死矛盾场景。
 - **`v2.5.0`（健康度审计根因修复，2026-05-31）**：源码深度审计后修复一批真实运行时缺陷 —— `agentRuns.downloadArtifact()` 超限不再静默截断而是抛错；本地工具回调 `Promise.race` 硬超时（忽略 `signal` 的 handler 也不再永挂）；OpenAI 流式 `reasoning_content` 后直接 `tool_calls`（无 text）时 block index 不再错乱；非法 `expires_at` 视为过期 + TokenStore 形状校验；OAuth 发现/注册/换/吊销链路统一走注入 `fetchImpl`；空成功响应（204）不再抛 JSON parse error；`apiBaseURL`/`complianceBaseURL` 与 gateway base 同级校验（拒 ws/wss/query/hash）；非流式请求默认超时；WebSocket 重复 connect 先关旧连接；`FileTokenStore.save()` 真 fsync；chat 请求对象不再被原地 mutate；Anthropic `extraBody` 不能覆盖 SDK 管理字段。**公开类型/方法签名零移除、零改名**（新增导出 `normalizeOverrideBaseURL` / `DEFAULT_API_TIMEOUT_MS`）。casehall/finance/enterprise 业务域路径经生产实证确认正确（同源代理直连 tk-dist），**未改**，并新增 URL 组装回归测试钉死契约。
 - **`v2.1.0`（已发布）**：远程控制 CrabCode 多接入面 —— `serverURL`/`baseURL` Gateway URL 公共契约（见下方小节）、`agentRuns.createRemoteRun` / `agentRuns.streamRemoteControl` + 11 事件 union（见 §Agent Runs → 远程控制）、`chatbridge` 第三方聊天平台桥接类型（types-only 骨架，见 §Chat Bridge）、专用 `remote_control` scope（不进 `allScopes()`）。契约见 `docs/audit/sdk-remote-control-contract-2026-05-27.md`。
 - **v2.0.0 BREAKING（Phase 3 复核 + 全量根治，2026-05-25）摘要**：
@@ -184,10 +185,12 @@ SDK 同时提供 **Anthropic + OpenAI 两条 endpoint**，**等地位**，对应
 
 路由由 `getAdapterForModel(model)` 按 ManagedModel 的 `preferred_format` / `supported_formats` 决策（wire-format 字段，snake_case 与上游 Go json tag 严格对齐；ManagedModel 上其余顶层字段如 `modelId` / `isEnabled` / `inputModalities` 走 camelCase，详见 `src/models/types.ts`）：
 
-1. `preferred_format` 非空 → 按值（`anthropic` | `openai`）
+1. `preferred_format` 非空 **且**该格式在 `supported_formats` 内（或 `supported_formats` 未声明）→ 按值（`anthropic` | `openai`）
 2. `supported_formats` 含 `anthropic` → AnthropicAdapter
 3. `supported_formats` 含 `openai` → OpenAIAdapter
 4. 两字段均空（旧上游）→ 按 `provider` 名回落
+
+> **格式一致性护栏（v2.5.1）**：第 1 步收紧后，`preferred_format` 与 `supported_formats` 矛盾时（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）不再盲信 `preferred_format`，而落到第 2/3 步按实际支持的格式选择，避免路由到模型并不支持的端点。`supported_formats` 未声明（旧上游）时 `preferred_format` 仍直接采信，向后兼容。
 
 `client.chat()` / `client.chatStream()` 内部自动调 `getAdapterForModel`，使用方无需关心。
 
@@ -925,7 +928,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.5.0 | **当前稳定版** | **源码健康度审计根因修复（2026-05-31）**。修复一批真实运行时缺陷：`downloadArtifact()` 超限抛错（不再静默截断）/ 本地工具 `Promise.race` 硬超时 / OpenAI 流式 reasoning→tool_calls block index 修正 / 非法 `expires_at` 视为过期 + TokenStore 校验 / OAuth 链路走注入 `fetchImpl` / 空成功响应（204）不抛 parse error / `apiBaseURL`·`complianceBaseURL` 同级校验 / 非流式默认超时 / WS 重复 connect 关旧连接 / `FileTokenStore.save()` 真 fsync / chat 请求对象不被原地 mutate / Anthropic `extraBody` 不覆盖 SDK 管理字段 / `CompliancePollError` 携带最后状态。**公开类型/方法签名零移除、零改名**（新增导出 `normalizeOverrideBaseURL`·`DEFAULT_API_TIMEOUT_MS`）。casehall/finance/enterprise 路径经生产实证确认正确（同源代理直连 tk-dist）未改 + 新增 URL 组装回归测试。详见 CHANGELOG 与 `docs/audit/TS版SDK源码健康度与文档审计报告.md`。 |
+| 2.5.1 | **当前稳定版** | **模型 adapter 格式一致性护栏（2026-05-31）**。`getAdapterForModel` 路由加固：`preferred_format` 仅当被 `supported_formats` 收录（或 `supported_formats` 未声明）才采信，防止上游元数据漂移把 SDK 路由到模型不支持的格式端点（撞 `/anthropic` 4xx）。`supported_formats` 未声明（旧上游）时行为逐字节不变；新增 3 条 routing 用例。详见 CHANGELOG。 |
+| 2.5.0 | 稳定版 | **源码健康度审计根因修复（2026-05-31）**。修复一批真实运行时缺陷：`downloadArtifact()` 超限抛错（不再静默截断）/ 本地工具 `Promise.race` 硬超时 / OpenAI 流式 reasoning→tool_calls block index 修正 / 非法 `expires_at` 视为过期 + TokenStore 校验 / OAuth 链路走注入 `fetchImpl` / 空成功响应（204）不抛 parse error / `apiBaseURL`·`complianceBaseURL` 同级校验 / 非流式默认超时 / WS 重复 connect 关旧连接 / `FileTokenStore.save()` 真 fsync / chat 请求对象不被原地 mutate / Anthropic `extraBody` 不覆盖 SDK 管理字段 / `CompliancePollError` 携带最后状态。**公开类型/方法签名零移除、零改名**（新增导出 `normalizeOverrideBaseURL`·`DEFAULT_API_TIMEOUT_MS`）。casehall/finance/enterprise 路径经生产实证确认正确（同源代理直连 tk-dist）未改 + 新增 URL 组装回归测试。详见 CHANGELOG 与 `docs/audit/TS版SDK源码健康度与文档审计报告.md`。 |
 | 2.4.0 | 稳定版（npm latest） | **`SkillStoreItem.skillMd?` 透出（additive minor，2026-05-30）**。修复下游经 SDK 拿不到技能 SKILL.md 正文：网关 `SkillStoreResponse` 早已返回 `skillMd`（`ToStoreResponse()` 已 map），但 SDK `SkillStoreItem` 漏声明。新增可选 `skillMd?: string`（Anthropic SKILL.md 正文，仅 Detail/resolve/非 minimal browse 携带；`SkillStoreListItem` minimal 刻意不含正文）；`readme` 一并改为可选 `readme?`（匹配网关 `omitempty`）。零方法签名/运行时改动。下游 CrabCode 重锁 `@acosmi/sdk-ts@2.4.0` + `bun install --force` 生效；SKILL.md 为不可信用户内容，GUI 渲染须 sanitize + 展示 securityLevel/securityScore/certificationStatus。 |
 | 2.3.0 | 稳定版 | **`apiBaseURL` 可配置网关 base（additive，2026-05-30）**。新增可选 client 配置项，让浏览器侧 `/api/v4` 网关调用（managed-model / agent-run / casehall）可经同源代理转发，规避非网关同源域名（如 `sign.zhonglvbao.com`）下 acosmi.com 对带 `Origin` 跨域浏览器请求的 403。公开类型 / 方法签名零移除、零改名（additive minor）。 |
 | 2.2.1 | 稳定版 | **README 字段名修正（docs-only patch，2026-05-29）**。修复 v2.2.0 README 示例把能力字段误写为 camelCase（`supportsImageGeneration`）；正确为 wire snake_case `capabilities.supports_image_generation` / `supports_video_generation`（`listModels` 对 `capabilities` 对象原样透传）。补充：字段随 catalog 下发、可选（缺省 false）、无专用 catalog helper。无源码改动，从 2.2.0 升级无需 review。 |
