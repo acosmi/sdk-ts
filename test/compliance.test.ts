@@ -574,4 +574,58 @@ describe('ComplianceClient — polling', () => {
     }
     expect(captured?.kind).toBe('terminal_failure');
   });
+
+  // ── D5: CompliancePollError 携带最后状态 (lastInfo) ──
+
+  it('terminal_failure 携带最后一次轮询到的状态 (status + errorMessage) 进 lastInfo', async () => {
+    const { fetch } = captureFetch(() =>
+      jsonResponse({
+        code: 0,
+        data: {
+          id: 8,
+          status: 'FAILED',
+          terminal: true,
+          retryable: false,
+          errorCode: 1031002007,
+          errorMessage: 'provider rejected',
+        },
+      }),
+    );
+    const client = clientWith(fetch);
+    let captured: CompliancePollError | undefined;
+    try {
+      await client.compliance.waitForProviderRequestTerminal(8, { initialIntervalMs: 1 });
+    } catch (e) {
+      captured = e as CompliancePollError;
+    }
+    expect(captured?.kind).toBe('terminal_failure');
+    // 最后状态必须被带出, 供排障使用
+    expect(captured?.lastInfo).toBeDefined();
+    expect(captured?.lastInfo?.terminal).toBe(true);
+    expect(captured?.lastInfo?.code).toBe(1031002007);
+    expect(captured?.lastInfo?.message).toContain('provider rejected');
+  });
+
+  it('timeout (无内联 error) 仍带出最后观测到的 status 文本', async () => {
+    const { fetch } = captureFetch(() =>
+      jsonResponse({ code: 0, data: { id: 5, assetId: 1, verificationStatus: 'PENDING' } }),
+    );
+    const client = clientWith(fetch);
+    let captured: CompliancePollError | undefined;
+    try {
+      await client.compliance.waitForTimestampVerified(5, {
+        initialIntervalMs: 5,
+        maxIntervalMs: 5,
+        timeoutMs: 30,
+      });
+    } catch (e) {
+      captured = e as CompliancePollError;
+    }
+    expect(captured?.kind).toBe('timeout');
+    expect(captured?.lastInfo).toBeDefined();
+    expect(captured?.lastInfo?.terminal).toBe(false);
+    // 无内联 errorCode → code 回退 0, message 携带最后状态
+    expect(captured?.lastInfo?.code).toBe(0);
+    expect(captured?.lastInfo?.message).toContain('PENDING');
+  });
 });

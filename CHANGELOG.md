@@ -5,24 +5,58 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.1] - 2026-05-30 — `SkillStoreItem.skillMd` 透出（additive type-only patch）
+## [2.5.1] - 2026-05-31 — 模型 adapter 格式一致性护栏（行为加固 patch，向后兼容）
 
-> 版本订正：本 additive type-only 补丁原以 `2.2.2` 记录，但 npm 已发布 `2.3.0`（`apiBaseURL`，见下），`2.2.2` 从未发布。故本补丁顺延为 `2.3.1`（叠加在 `2.3.0` 之上），仓库源与已发布版本归一。
-
-Additive patch，纯类型，无方法签名 / 运行时 / 网关改动。修复**下游经 SDK 拿不到技能 SKILL.md 正文**：网关 `SkillStoreResponse` 早已返回 `skillMd`（`json:"skillMd,omitempty"`，`ToStoreResponse()` 已 map），但 SDK 的 `SkillStoreItem` 类型未声明该字段，导致 `getSkillDetail` / `resolveSkill` / `browseSkills` 的消费方（CrabCode）在类型层访问不到正文。
+`getAdapterForModel` 路由加固：`preferred_format` 现仅在**确被 `supported_formats` 收录**时才采信（或 `supported_formats` 未声明时维持原样）。防止上游元数据漂移（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）把 SDK 路由到模型并不支持的格式端点，撞 `/anthropic`「未绑定 Anthropic」4xx。这是网关侧「同 model_id 双 profile 选行」根因修复在 SDK 侧的同构护栏。
 
 ### Changed
 
-- **`SkillStoreItem` 新增可选 `skillMd?: string`** —Anthropic SKILL.md 正文。声明为可选以匹配网关 `omitempty`（空时字段缺省）。仅全量响应（Detail / resolve / 非 minimal browse）携带；`SkillStoreListItem`（`fields=minimal`）**不含**正文，刻意保持 90% 瘦身不变。
-- **`SkillStoreItem.readme` 改为可选 `readme?: string`** — 修正旧的轻微契约不符：网关该字段为 `json:"readme,omitempty"`，空时缺省，原 `readme: string`（required）与运行时不符。
+- **`getAdapterForModel`**：决策顺序第 1 步由「`preferred_format` 非空即采信」收紧为「`preferred_format` 非空**且**该格式在 `supported_formats` 内（或 `supported_formats` 未声明）才采信」。`supported_formats` 为空/未知（旧上游）时行为逐字节不变（仍采信 `preferred_format`，再回落 provider 名硬编码）。新增 3 条 `test/adapters/routing.test.ts` 用例钉死矛盾场景。
+- 升级无需 review：仅当上游同时返回 `preferred_format` 与一个**不含该格式**的 `supported_formats` 时路由结果才改变（此前是错误路由，现纠正）。
 
-未触碰 `SkillStoreListItem`（minimal 刻意剥正文）。从 v2.3.0 升级无需 review；消费 `skillMd` 时按可选处理（空表示该技能未提供 SKILL.md 正文）。
+## [2.5.0] - 2026-05-31 — 源码健康度审计根因修复（additive minor，公开 API 零移除/零改名）
 
-> 下游生效需在 CrabCode 侧重锁 `@acosmi/sdk-ts@2.3.1` + `bun install --force`（CrabCode CLAUDE.md §2）。SKILL.md 为用户发布的不可信内容，GUI 渲染须 sanitize（禁原始 HTML 注入）并同屏展示 `securityLevel` / `securityScore` / `certificationStatus`。
+逐文件源码 + 文档深度审计后的根因修复。主索引：`docs/audit/TS版SDK源码健康度与文档审计报告.md`（含 §0.5 前置核实修订与 live 生产实证）。**公开类型与方法签名零移除、零改名**；新增导出 `normalizeOverrideBaseURL` / `DEFAULT_API_TIMEOUT_MS` / `OpenAIStreamConverter`。
+
+### 重要澄清（推翻原审计 P1-1 误报）
+
+- **casehall / finance / enterprise 业务域路径未改，且经生产实证确认正确。** 它们带 `/api/...` 前缀、经 `apiURL()` 拼成 `/api/v4/api/...`（双 `/api`）是「同源代理直连 tk-dist」链路的**有意契约**（nginx `location /api/v4/api/casehall/` → tk-dist `:48080/api/casehall/*`），与后端控制器 `@RequestMapping` 逐字一致。`sign.zhonglvbao.com/api/v4/api/casehall/lawyer-credentials/my` 实测 401 可达；若按表面"去 /api"会落 404 破坏在产 casehall。新增 `test/business-domain-url.test.ts` 钉死全部业务域 URL 契约，防回归。
+- casehall 的 `listLawyers` 等 9 个 `/casehall/app|me/...` 方法对应**后端 consumer 端点尚未实现**，已加 `@experimental` JSDoc 诚实标注（调用会 404）。
+
+### Fixed
+
+- **`agentRuns.downloadArtifact()` 超限静默截断 → 抛错**：读 `maxDownloadSize + 1` 探测，超限抛 `download artifact: response exceeds NMB limit`（对齐 `downloadSkill`），不再把损坏的截断数据交给调用方。
+- **本地工具回调无硬超时 → `Promise.race` 硬超时**：`invokeLocalTool` 即使 handler 完全忽略 `ctx.signal` 也不会永挂，超时返回稳定失败结果；保留 `ctx.signal` 协作式取消。
+- **OpenAI 流式 `reasoning_content` 后直接 `tool_calls`（无 text）时 block index 错乱 → 修正**：新增 `thinkingBlockIndex` 记录 thinking 占用索引；tool_calls 新建 block 前镜像 text 分支先关 thinking 再递增；finish 按真实索引关闭。修 thinking/tool 撞 index 0 与错配 stop。
+- **非法 `expires_at` 被当未过期 → 视为过期**：`tokenSetIsExpired` 加 `Number.isFinite` 闸；`FileTokenStore`/`LocalStorageTokenStore` 的 `load()` 加 `isValidTokenSet` 形状校验（坏数据返回 `null` 而非带坏 token 继续）。
+- **OAuth 链路绕过注入 `fetchImpl` → 统一走注入 fetch**：`auth.ts` 的 discover/register/exchange/refresh/revoke helper 末位加可选 `fetchImpl`（默认全局 fetch，向后兼容），`Client` 全链路传 `this.fetchImpl`。自定义 fetch/代理/测试 mock/受限运行时现可覆盖全链路。
+- **空成功响应（204/空 body）抛 JSON parse error → 返回 `undefined`**：核心 `doJSONFullInternal` 与 `agentRuns.requestAPI` 对齐 compliance，空响应不再 `JSON.parse('')`。
+- **`apiBaseURL` / `complianceBaseURL` 缺校验 → 与 gateway base 同级校验**：新增 `normalizeOverrideBaseURL` 拒 ws/wss、空 host、query、hash。
+- **部分非流式请求无默认超时 → 套默认超时**：新增 `DEFAULT_API_TIMEOUT_MS`（60s）+ `Client.withRequestTimeout`；`agentRuns.requestAPI` 与 `compliance.executeJson` 在调用方未传 signal 时套组合超时（超时 + 用户 signal 任一 abort）。流式/下载路径保留长连接语义。
+- **WebSocket 重复 `connect` 泄漏旧连接 → 先关旧再建新**：`connect()` 开头若已有连接先 `disconnect()`，杜绝多个后台重连 loop / FD 泄漏。
+- **`FileTokenStore.save()` 注释承诺 fsync 但未实现 → 真 fsync**：`open → writeFile → fh.sync()（文件 fsync）→ close → rename → 目录 fsync（best-effort，跨平台不支持时吞错）`，兑现 durability 承诺，保留 atomic rename。
+- **chat 请求对象被原地 mutate → 内部浅 clone**：`chat`/`chatMessages*`/`chatStream*` 5 处入口浅 clone（`{...req, stream}`），sanitizer 改 clone 的 `rawMessages`，调用方传入的 `req` 零改动。
+- **Anthropic `extraBody` 能覆盖 SDK 管理字段 → denylist**：`thinking`/`effort`/`max_tokens`/`temperature`/`betas` 强制跳过并告警，保留透传非管理字段。
+- **`CompliancePollError` 不携带最后状态 → 填充 `lastInfo`**：`poll()` 各抛错点装入最后一次状态视图，便于排障。
+
+### Changed（文档）
+
+- README / 开发手册：版本归一到 2.5.0；`Invoice.taxNumber` → `taxId`（README + 手册）；finance 金额叙述改「`amountFen` 分单位整数 number」（钱包/展示类仍 json.Number string）；多端章节补浏览器 `localStorage` token + WebSocket query token 风险说明；开发手册 P0 红线改为「任何 namespace 新增/变更方法必须有 URL 组装测试」并新增「两条传输约定」专章 + provider 双状态枚举（大写 `ComplianceProviderRequestStatus` vs 小写 `ComplianceProviderStatus`）澄清。
+
+## [2.4.0] - 2026-05-30 — `SkillStoreItem.skillMd?` 透出（additive minor，零回归）
+
+Additive minor，纯类型，无方法签名 / 运行时改动。修复**下游经 SDK 拿不到技能 SKILL.md 正文**：网关 `SkillStoreResponse` 早已返回 `skillMd`（`json:"skillMd,omitempty"`，`ToStoreResponse()` 已 map），但 SDK 的 `SkillStoreItem` 类型未声明该字段，导致 `getSkillDetail` / `resolveSkill` / `browseSkills` 的消费方（CrabCode）在类型层访问不到正文。
+
+### Changed
+
+- **`SkillStoreItem` 新增可选 `skillMd?: string`** — Anthropic SKILL.md 正文。声明为可选以匹配网关 `omitempty`（空时字段缺省）。仅全量响应（Detail / resolve / 非 minimal browse）携带；`SkillStoreListItem`（`fields=minimal`）**不含**正文，刻意保持 90% 瘦身不变。
+- **`SkillStoreItem.readme` 改为可选 `readme?: string`** — 修正旧的轻微契约不符：网关该字段为 `json:"readme,omitempty"`，空时缺省。
+
+未触碰 `SkillStoreListItem`（minimal 刻意剥正文）。从 2.3.x 升级无需 review；消费 `skillMd` 时按可选处理（空表示该技能未提供 SKILL.md 正文，可回退 `readme`）。
+
+> 下游 CrabCode 生效需重锁 `@acosmi/sdk-ts@2.4.0` + `bun install --force`。SKILL.md 为用户发布的不可信内容，GUI 渲染须 sanitize（禁原始 HTML 注入）并同屏展示 `securityLevel` / `securityScore` / `certificationStatus`。
 
 ## [2.3.0] - 2026-05-30 — `apiBaseURL` 可配置网关 base（additive，零回归）
-
-> 来源订正：`2.3.0` 已发布到 npm（含 `apiBaseURL`），但其**源未提交进 monorepo**（仅 dist 在 npm）。本条按已发布行为补回源（`apiBaseURL` 严格对标 `complianceBaseURL` 同构实现），使仓库源 = 已发布 `2.3.0`。
 
 Additive minor。新增一个可选 client 配置项，让浏览器侧 `/api/v4` 网关调用（managed-model / agent-run / **casehall**）可经**同源代理**转发，规避非网关同源域名（如 `sign.zhonglvbao.com`）下 acosmi.com 对带 `Origin` 跨域浏览器请求的 403。
 

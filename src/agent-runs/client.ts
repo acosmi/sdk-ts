@@ -2,7 +2,7 @@
 
 import type { APIResponse } from '../shared/api-response';
 import { apiResponseBusinessError } from '../shared/api-response';
-import { Client } from '../core/client';
+import { Client, DEFAULT_API_TIMEOUT_MS } from '../core/client';
 import {
   iterSSELines,
   maxDownloadSize,
@@ -197,7 +197,12 @@ export class AgentRunsClient {
     );
     const contentType = resp.headers.get('Content-Type') ?? undefined;
     const filename = filenameFromContentDisposition(resp.headers.get('Content-Disposition')) ?? artifactId;
-    const data = await readLimited(resp.body!, maxDownloadSize);
+    // 多读 1 字节探测超限 — 与 skills.downloadSkill 一致, 拒绝静默截断 (否则下游拿到
+    // 被砍断的不完整产物却毫无感知)。
+    const data = await readLimited(resp.body!, maxDownloadSize + 1);
+    if (data.byteLength > maxDownloadSize) {
+      throw new Error(`download artifact: response exceeds ${maxDownloadSize >> 20}MB limit`);
+    }
     return { data, filename, contentType };
   }
 
@@ -291,7 +296,6 @@ export class AgentRunsClient {
     }
 
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), timeoutMs);
     let parentAbort: (() => void) | undefined;
     if (signal) {
       if (signal.aborted) ctl.abort();
@@ -301,7 +305,23 @@ export class AgentRunsClient {
       }
     }
 
-    try {
+    // 硬超时根因修复: 即使 handler 完全忽略 ctx.signal (不响应协作式取消) 也不会永挂。
+    // Promise.race 一边跑 handler, 一边跑一个在 timeoutMs 后 resolve 为稳定失败结果的
+    // promise; 超时方胜出即立刻返回, 不再等 handler。ctl.signal 仍传给 handler 以便
+    // 配合的实现尽早收手。
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutResult: Promise<AgentRunLocalToolResult> = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        ctl.abort(); // 协作式取消提示 (handler 若监听 signal 可尽早退出)
+        resolve({
+          requestId: event.requestId,
+          ok: false,
+          error: `local tool timed out after ${timeoutMs}ms`,
+        });
+      }, timeoutMs);
+    });
+
+    const handlerTask: Promise<AgentRunLocalToolResult> = (async () => {
       const content = await handler(event.input, {
         runId,
         requestId: event.requestId,
@@ -309,7 +329,14 @@ export class AgentRunsClient {
         signal: ctl.signal,
       });
       return { requestId: event.requestId, ok: true, content };
+    })();
+    // 超时方先胜出时, handler 后续 reject 不能逃逸成未捕获异常。
+    handlerTask.catch(() => {});
+
+    try {
+      return await Promise.race([handlerTask, timeoutResult]);
     } catch (e) {
+      // 仅 handler 抢先 reject 会落这里 (超时分支永不 reject)。
       if (signal?.aborted) throw e;
       const timedOut = ctl.signal.aborted;
       return {
@@ -354,8 +381,16 @@ export class AgentRunsClient {
     signal: AbortSignal | undefined,
     opts: RequestOptions,
   ): Promise<T> {
-    const resp = await this.requestRaw(method, path, body, signal, opts);
+    // 非流式 JSON 请求套默认超时 (调用方可经 opts.timeoutMs 覆盖)。
+    // stream / download 路径直接调 requestRaw 且不带 timeoutMs, 保留长连接语义。
+    const resp = await this.requestRaw(method, path, body, signal, {
+      ...opts,
+      timeoutMs: opts.timeoutMs ?? DEFAULT_API_TIMEOUT_MS,
+    });
     const text = await resp.text();
+    // 空 body 的成功响应 (HTTP 204 / 200 空体) — 不要 JSON.parse('') (抛 SyntaxError)。
+    // 与 core doJSONFullInternal / compliance executeJson 一致, 空响应返回 undefined。
+    if (!text) return undefined as unknown as T;
     const result = JSON.parse(text) as APIResponse<T>;
     const bizErr = apiResponseBusinessError(result);
     if (bizErr) throw bizErr;
@@ -369,6 +404,27 @@ export class AgentRunsClient {
     signal: AbortSignal | undefined,
     opts: RequestOptions,
     retried = false,
+  ): Promise<Response> {
+    // opts.timeoutMs 仅由非流式 JSON 路径 (requestAPI) 设置 — 用组合 signal (超时 + 用户 signal,
+    // 任一触发都 abort) 替换裸 signal; 流式/下载路径不带 timeoutMs, signal 原样透传保留长连接。
+    if (opts.timeoutMs != null && opts.timeoutMs > 0) {
+      const ctl = this.client.withRequestTimeout(opts.timeoutMs, signal);
+      try {
+        return await this.requestRawInner(method, path, body, ctl.signal, opts, retried);
+      } finally {
+        ctl.dispose();
+      }
+    }
+    return this.requestRawInner(method, path, body, signal, opts, retried);
+  }
+
+  private async requestRawInner(
+    method: string,
+    path: string,
+    body: unknown | null,
+    signal: AbortSignal | undefined,
+    opts: RequestOptions,
+    retried: boolean,
   ): Promise<Response> {
     const token = await this.client.ensureToken(signal);
     const url = this.client.apiURL(path);
@@ -389,7 +445,8 @@ export class AgentRunsClient {
         await resp.body?.cancel();
       } catch {}
       await this.client.forceRefresh(signal);
-      return this.requestRaw(method, path, body, signal, opts, true);
+      // 复用同一组合 signal (含剩余超时预算): 直接走 inner, 不再重套超时。
+      return this.requestRawInner(method, path, body, signal, opts, true);
     }
 
     if (resp.status < 200 || resp.status >= 300) {
@@ -403,6 +460,8 @@ export class AgentRunsClient {
 interface RequestOptions {
   retryOn401: boolean;
   accept?: string;
+  /** 非流式 JSON 请求的超时上限 (毫秒); 未设置 = 无超时 (流式/下载路径)。 */
+  timeoutMs?: number;
 }
 
 interface WireAgentRunCreateRequest {

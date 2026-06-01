@@ -128,3 +128,4 @@ export function getAdapterForModel(m: ManagedModel): ProviderAdapter {
 }
 
 export { AnthropicAdapter, OpenAIAdapter };
+export { OpenAIStreamConverter, newOpenAIStreamConverter } from './openai';

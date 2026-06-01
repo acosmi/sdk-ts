@@ -6,6 +6,7 @@
 // 接口异步化: Go 同步 IO, TS 必须 async。所有 Save/Load/Clear 返回 Promise。
 
 import type { TokenSet } from '../auth/types';
+import { isValidTokenSet } from '../auth/types';
 
 /**
  * Token 持久化接口
@@ -182,7 +183,19 @@ export class FileTokenStore implements TokenStore {
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       const tmp = `${p}.tmp.${process.pid}.${Date.now()}.${Math.floor(Math.random() * 1e6)}`;
       const data = JSON.stringify(tokens, null, 2);
-      await fs.writeFile(tmp, data, { encoding: 'utf8', mode: 0o600 });
+
+      // 1) 写 tmp + fsync 文件: 内容真正落盘 (writeFile 仅写入 page cache, 进程/机器
+      //    崩溃时 rename 后可能得到 0 字节或旧内容). 注释承诺 "fsync 后 rename", 这里兑现。
+      {
+        const fh = await fs.open(tmp, 'w', 0o600);
+        try {
+          await fh.writeFile(data, { encoding: 'utf8' });
+          await fh.sync(); // fsync — 文件内容 durable
+        } finally {
+          await fh.close();
+        }
+      }
+
       try {
         await fs.rename(tmp, p);
       } catch (e) {
@@ -194,6 +207,21 @@ export class FileTokenStore implements TokenStore {
         }
         throw e;
       }
+
+      // 2) 对目录 fsync: 让 rename 产生的目录项 (新文件名 → inode 的绑定) durable,
+      //    否则崩溃后目录项可能丢失。跨平台: Windows / 部分 FS 上对目录 open/fsync 会抛
+      //    (EISDIR/EPERM/ENOTSUP), 这是平台不支持目录 fsync, 不应让 save 失败 —— 文件内容
+      //    已 fsync, 目录项 durability 退化为依赖 OS, 与原 atomic rename 语义一致。
+      try {
+        const dirHandle = await fs.open(dir, 'r');
+        try {
+          await dirHandle.sync();
+        } finally {
+          await dirHandle.close();
+        }
+      } catch {
+        // 平台不支持对目录 fsync — 吞掉, 不影响 save 成功。
+      }
     });
   }
 
@@ -203,7 +231,16 @@ export class FileTokenStore implements TokenStore {
       const p = await this.resolvePath();
       try {
         const data = await fs.readFile(p, 'utf8');
-        return JSON.parse(data) as TokenSet;
+        // 损坏 / 截断 JSON / 缺字段 / 旧版本残留 → 视为无有效 token (返回 null),
+        // 不抛错: caller (Client.create) 会据此重新走 Login, 而不是整个初始化失败。
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          return null;
+        }
+        if (!isValidTokenSet(parsed)) return null;
+        return parsed;
       } catch (e) {
         if (isNotExistError(e)) return null;
         throw new Error(
@@ -276,11 +313,15 @@ export class LocalStorageTokenStore implements TokenStore {
   async load(): Promise<TokenSet | null> {
     const data = globalThis.localStorage.getItem(this.key);
     if (data == null || data === '') return null;
+    let parsed: unknown;
     try {
-      return JSON.parse(data) as TokenSet;
+      parsed = JSON.parse(data);
     } catch {
       return null;
     }
+    // 与 FileTokenStore 一致: 缺字段 / 类型错 / 旧版本残留 → 当作无 token。
+    if (!isValidTokenSet(parsed)) return null;
+    return parsed;
   }
 
   async clear(): Promise<void> {

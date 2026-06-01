@@ -51,6 +51,7 @@ export async function discoverWithProfile(
   serverURL: string,
   profile: OAuthMetadataProfile,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<ServerMetadata> {
   let parsed: URL;
   try {
@@ -64,7 +65,7 @@ export async function discoverWithProfile(
   const ctl = withTimeout(authTimeoutMs, signal);
   let resp: Response;
   try {
-    resp = await fetch(endpoint, { method: 'GET', signal: ctl.signal });
+    resp = await fetchImpl(endpoint, { method: 'GET', signal: ctl.signal });
   } catch (e) {
     throw new Error(`discover: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
@@ -99,8 +100,12 @@ export async function discoverWithProfile(
  * well-known 端点按 RFC 8414 必须在 origin 根路径:
  *   https://acosmi.ai/.well-known/oauth-authorization-server/desktop
  */
-export async function discover(serverURL: string, signal?: AbortSignal): Promise<ServerMetadata> {
-  return discoverWithProfile(serverURL, 'desktop', signal);
+export async function discover(
+  serverURL: string,
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<ServerMetadata> {
+  return discoverWithProfile(serverURL, 'desktop', signal, fetchImpl);
 }
 
 /**
@@ -116,8 +121,9 @@ export async function discover(serverURL: string, signal?: AbortSignal): Promise
 export async function discoverWebOAuthMetadata(
   serverURL: string,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<ServerMetadata> {
-  return discoverWithProfile(serverURL, 'web', signal);
+  return discoverWithProfile(serverURL, 'web', signal, fetchImpl);
 }
 
 // =============================================================================
@@ -129,6 +135,7 @@ export async function register(
   meta: ServerMetadata,
   appName: string,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<ClientRegistration> {
   const regReq = {
     client_name: appName,
@@ -141,7 +148,7 @@ export async function register(
   const ctl = withTimeout(authTimeoutMs, signal);
   let resp: Response;
   try {
-    resp = await fetch(meta.registration_endpoint, {
+    resp = await fetchImpl(meta.registration_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(regReq),
@@ -185,6 +192,7 @@ export async function registerWebOAuthClient(
   meta: ServerMetadata,
   opts: RegisterWebOAuthClientOptions,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<ClientRegistration> {
   const regReq = {
     client_name: opts.clientName,
@@ -198,7 +206,7 @@ export async function registerWebOAuthClient(
   const ctl = withTimeout(authTimeoutMs, signal);
   let resp: Response;
   try {
-    resp = await fetch(meta.registration_endpoint, {
+    resp = await fetchImpl(meta.registration_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(regReq),
@@ -609,6 +617,7 @@ export async function completeWebAuthorizationRequest(
   pending: WebAuthorizationPending,
   params: WebAuthorizationCallbackParams,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<TokenSet> {
   if (!params.code) {
     throw new Error('completeWebAuthorizationRequest: missing authorization code');
@@ -619,7 +628,7 @@ export async function completeWebAuthorizationRequest(
     );
   }
 
-  const meta = await discoverWebOAuthMetadata(pending.serverURL, signal);
+  const meta = await discoverWebOAuthMetadata(pending.serverURL, signal, fetchImpl);
   const resp = await exchangeCode(
     meta,
     pending.clientID,
@@ -627,6 +636,7 @@ export async function completeWebAuthorizationRequest(
     pending.redirectURI,
     pending.verifier,
     signal,
+    fetchImpl,
   );
   return newTokenSet(resp, pending.clientID, pending.serverURL);
 }
@@ -642,6 +652,7 @@ export async function exchangeCode(
   redirectURI: string,
   codeVerifier: string,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<TokenResponse> {
   const data = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -650,7 +661,7 @@ export async function exchangeCode(
     redirect_uri: redirectURI,
     code_verifier: codeVerifier,
   });
-  return postToken(meta.token_endpoint, data, signal);
+  return postToken(meta.token_endpoint, data, signal, fetchImpl);
 }
 
 /** 与 exchangeCode 相同, 但附带 expires_in 参数 (setup-token 模式) */
@@ -662,6 +673,7 @@ export async function exchangeCodeWithExpiry(
   codeVerifier: string,
   expiresIn: number,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<TokenResponse> {
   const data = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -671,7 +683,7 @@ export async function exchangeCodeWithExpiry(
     code_verifier: codeVerifier,
     expires_in: String(expiresIn),
   });
-  return postToken(meta.token_endpoint, data, signal);
+  return postToken(meta.token_endpoint, data, signal, fetchImpl);
 }
 
 /** 刷新 access_token */
@@ -680,13 +692,14 @@ export async function refreshToken(
   clientID: string,
   refreshTokenValue: string,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<TokenResponse> {
   const data = new URLSearchParams({
     grant_type: 'refresh_token',
     client_id: clientID,
     refresh_token: refreshTokenValue,
   });
-  return postToken(meta.token_endpoint, data, signal);
+  return postToken(meta.token_endpoint, data, signal, fetchImpl);
 }
 
 /** 吊销 token. 服务端不支持吊销时静默跳过. */
@@ -694,6 +707,7 @@ export async function revokeToken(
   meta: ServerMetadata,
   token: string,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<void> {
   if (!meta.revocation_endpoint || meta.revocation_endpoint === '') {
     return;
@@ -702,7 +716,7 @@ export async function revokeToken(
 
   const ctl = withTimeout(authTimeoutMs, signal);
   try {
-    await fetch(meta.revocation_endpoint, {
+    await fetchImpl(meta.revocation_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: data,
@@ -719,11 +733,12 @@ async function postToken(
   endpoint: string,
   data: URLSearchParams,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<TokenResponse> {
   const ctl = withTimeout(authTimeoutMs, signal);
   let resp: Response;
   try {
-    resp = await fetch(endpoint, {
+    resp = await fetchImpl(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: data,
