@@ -8,6 +8,9 @@
 //   - TS:  本文件 + compliance/scopes.ts 的 Scope* 常量
 // 合规 scope 不做分组合并 — 服务端按细粒度校验, SDK 也只应按需申请最小集合。
 // 合规 scope 已迁出至 compliance/scopes.ts。
+//
+// 高风险分组 scope (remote_control + chat_bridge) 同样字面量镜像自 Go DesktopOAuthScopes,
+// 均不进 allScopes(), 服务端 ScopeExpansion 各自展开为 3 个子 scope; 任一变更需同步 Go 端。
 
 export const ScopeAI = 'ai'; // 模型服务: 模型调用 + 流量包 + 权益
 export const ScopeSkills = 'skills'; // 技能与工具: 技能商店 + 工具列表 + 执行
@@ -37,6 +40,15 @@ export const ScopeRemoteControlAgentRun = 'remote_control:agent-run';
 export const ScopeRemoteControlSessionControl = 'remote_control:session-control';
 /** 代表用户提交远控权限审批响应 (allow / deny / timeout). */
 export const ScopeRemoteControlPermissionResponse = 'remote_control:permission-response';
+
+/** 第三方聊天集成桥接 (分组 scope, 服务端 ScopeExpansion 展开为 read/write/rotate)。凭证管理高风险, 不进 allScopes()。 */
+export const ScopeChatBridge = 'chat_bridge';
+/** 查询 integration / session / 凭证元数据 (仅 ref+fingerprint)。 */
+export const ScopeChatBridgeRead = 'chat_bridge:read';
+/** 创建 / 更新 integration 与凭证。 */
+export const ScopeChatBridgeWrite = 'chat_bridge:write';
+/** 轮换 / 吊销凭证 (高风险)。 */
+export const ScopeChatBridgeRotate = 'chat_bridge:rotate';
 
 /** @deprecated 旧细粒度 scope, 保留向后兼容, 新代码请用分组 scope */
 export const ScopeModels = 'models';
@@ -85,4 +97,11 @@ export function skillScopes(): string[] {
  */
 export function remoteControlScopes(): string[] {
   return [ScopeRemoteControl];
+}
+
+/**
+ * 聊天桥接 scope (推荐). 仅返回分组 ScopeChatBridge; 服务端展开为 3 子 scope。调用方需显式申请, allScopes() 不含。
+ */
+export function chatBridgeScopes(): string[] {
+  return [ScopeChatBridge];
 }

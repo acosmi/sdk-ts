@@ -3,9 +3,17 @@
 // 端点对应 tk-dist `/api/distribution/public/pricing/plans`,
 // 通过 Go 网关 `/api/v4/distribution/public/pricing/plans` 反向代理 (P3 商品中心接入时落地).
 // P1 阶段 SDK 暴露 namespace, 后端代理路由 P3 子窗口补.
+//
+// 当前订阅的规范入口是网关 GET /entitlements/membership (getMembership) —— C 端会员中心订阅概览。
+// 旧的 /distribution/user/subscriptions 路径网关从未暴露 (恒 404), 已移除; listUserSubscriptions 现委托 getMembership。
 
 import type { APIResponse } from '../shared/api-response';
-import type { SubscriptionAudience, SubscriptionPlan, UserSubscription } from './types';
+import type {
+  Membership,
+  SubscriptionAudience,
+  SubscriptionPlan,
+  SubscriptionTier,
+} from './types';
 import { Client } from '../core/client';
 
 declare module '@acosmi/sdk-ts' {
@@ -16,8 +24,19 @@ declare module '@acosmi/sdk-ts' {
       signal?: AbortSignal,
     ): Promise<SubscriptionPlan[]>;
 
-    /** 列出当前用户已激活订阅 (跨档位; 通常 1 条 active) */
-    listUserSubscriptions(signal?: AbortSignal): Promise<UserSubscription[]>;
+    /** 查询当前用户会员/订阅概览 (C 端会员中心)。无活跃订阅时 hasActive=false/isFree=true。 */
+    getMembership(signal?: AbortSignal): Promise<Membership>;
+
+    /** 由活跃权益推导订阅层级 (free/pro)。 */
+    getSubscriptionTier(signal?: AbortSignal): Promise<SubscriptionTier>;
+
+    /** 订阅支付前绑定硬闸。返回 {ok:true} 表示已绑定手机/邮箱可放行支付。
+     *  未绑定时网关返回 HTTP 403 + 业务码 41001 (doJSON 抛 HTTPError), 调用方应据此引导用户先绑定联系方式再支付。 */
+    subscriptionPrecheck(signal?: AbortSignal): Promise<{ ok: boolean }>;
+
+    /** @deprecated 网关无订阅列表端点; 旧实现打 /distribution/user/subscriptions 恒 404。改用 getMembership()。
+     *  本方法现委托 getMembership(): 有活跃订阅返回单元素数组, 否则空数组。 */
+    listUserSubscriptions(signal?: AbortSignal): Promise<Membership[]>;
 
     /**
      * 按 planCode 精确取单个可售订阅计划 (V41 起 planCode 在 active 内唯一)。
@@ -42,17 +61,51 @@ Client.prototype.listPlans = async function (
   return Array.isArray(resp.data) ? resp.data : [];
 };
 
-Client.prototype.listUserSubscriptions = async function (
+Client.prototype.getMembership = async function (
   this: Client,
   signal?: AbortSignal,
-): Promise<UserSubscription[]> {
-  const resp = await this.doJSON<APIResponse<UserSubscription[]>>(
+): Promise<Membership> {
+  const resp = await this.doJSON<APIResponse<Membership>>(
     'GET',
-    '/distribution/user/subscriptions',
+    '/entitlements/membership',
     null,
     signal,
   );
-  return Array.isArray(resp.data) ? resp.data : [];
+  return resp.data;
+};
+
+Client.prototype.getSubscriptionTier = async function (
+  this: Client,
+  signal?: AbortSignal,
+): Promise<SubscriptionTier> {
+  const resp = await this.doJSON<APIResponse<SubscriptionTier>>(
+    'GET',
+    '/entitlements/subscription',
+    null,
+    signal,
+  );
+  return resp.data;
+};
+
+Client.prototype.subscriptionPrecheck = async function (
+  this: Client,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean }> {
+  const resp = await this.doJSON<APIResponse<{ ok: boolean }>>(
+    'GET',
+    '/consumer/subscriptions/precheck',
+    null,
+    signal,
+  );
+  return resp.data;
+};
+
+Client.prototype.listUserSubscriptions = async function (
+  this: Client,
+  signal?: AbortSignal,
+): Promise<Membership[]> {
+  const m = await this.getMembership(signal);
+  return m.hasActive ? [m] : [];
 };
 
 Client.prototype.getPlanByCode = async function (

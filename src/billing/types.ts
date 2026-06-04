@@ -36,19 +36,30 @@ export interface EntitlementItem {
   sourceId?: string;
   sourceType?: string;
   remark?: string;
-  createdAt: string;
+  /** 仅出现在 /grants map (toEntitlementMap 之外的 grants 端点)。 */
+  createdAt?: string;
+  /** list (toEntitlementMap) 与 grants 均返回 activatedAt。 */
+  activatedAt?: string;
+}
+
+// 形状严格对齐网关 model.InternalBalanceResponse (entitlement.go GetBalanceDetail 直透)。
+export interface BalanceDetailEntitlement {
+  id: string;
+  sourceOrderId?: string;
+  status: string;
+  tokenQuota: number;
+  tokenUsed: number;
+  expiresAt?: string;
 }
 
 /** 详细余额 (含每条权益明细) */
 export interface BalanceDetail {
-  totalTokenQuota: number;
-  totalTokenUsed: number;
-  totalTokenRemaining: number;
-  totalCallQuota: number;
-  totalCallUsed: number;
-  totalCallRemaining: number;
-  activeEntitlements: number;
-  entitlements: EntitlementItem[];
+  userId: string;
+  tokenRemaining: number;
+  tokenTotal: number;
+  callRemaining: number;
+  callTotal: number;
+  entitlements: BalanceDetailEntitlement[];
 }
 
 /** 核销记录 */
@@ -60,6 +71,13 @@ export interface ConsumeRecord {
   tokensConsumed: number;
   status: string;
   createdAt: string;
+  // V32 缓存/预留/调用计数列 (ConsumeRecordDO), 旧表未迁移时为 0/缺省。
+  reservedTokens?: number;
+  callsConsumed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
 }
 
 /** 核销记录分页响应 */
@@ -107,6 +125,7 @@ export interface ModelByQuotaResponse {
 }
 
 /** 单条模型系数 (SDK TTL 8s 缓存源) */
+/** @deprecated 系数管理已退役 (raw 1:1 计费)。网关 /entitlements/coefficients 永久返回 []。本类型仅为向后兼容保留。 */
 export interface ModelCoefficient {
   modelId: string;
   tenantId: string;
@@ -122,50 +141,89 @@ export interface ModelCoefficient {
 // Token Packages (商城)
 // =============================================================================
 
-/** 流量包商品。price 用 string (Go json.Number) 避免浮点精度丢失。 */
+/** 流量包商品。形状对齐 ConsumerPublicController.toProductView (/api/products 端点, /token-packages 代理转发)。 */
 export interface TokenPackage {
   id: string;
   name: string;
   description?: string;
-  tokenQuota: number;
-  callQuota?: number;
-  price: string;
-  validDays: number;
-  isEnabled: boolean;
-  sortOrder?: number;
+  originalPriceCent: number;
+  campaignPriceCent: number;
+  renewalPriceCent: number;
+  /** 折扣率 0~1 (BigDecimal, JSON 数字); 0 表示无折扣 */
+  discountRate: number;
+  modelsJson?: string;
+  productImage?: string;
+  features?: string[];
+  billingCycle: string;
+  featured: boolean;
+  eyebrow?: string;
+  promo?: string;
+  usage?: string;
+  sortOrder: number;
 }
 
-/** 订单。amount 用 string (Go json.Number) 避免精度丢失。 */
-export interface Order {
-  id: string;
-  packageId: string;
-  packageName?: string;
-  amount: string;
-  status: string;
-  payUrl?: string;
-  createdAt: string;
-}
-
-/** 订单状态 */
-export interface OrderStatus {
-  orderId: string;
-  status: string;
-}
+/** 支付方式枚举字面量 (来自 /payment-options)。 */
+export type PaymentMethod = 'WECHAT_NATIVE' | 'ALIPAY_PRECREATE' | 'BANK_TRANSFER';
 
 /** 下单请求 */
 export interface PayPayload {
-  payMethod?: string;
+  /** 支付方式枚举字面量 (来自 /payment-options)。字段名必须是 paymentMethod (后端 BuyRequest.paymentMethod)。 */
+  paymentMethod?: PaymentMethod;
+  deviceId?: string;
+  /** 幂等请求 ID */
+  clientRequestId?: string;
 }
+
+/** 下单 / 订单状态响应 (OrderPaymentService.BuyResponse, buy 与状态查询共用)。 */
+export interface BuyResponse {
+  orderId: number;
+  orderNo: string;
+  productId?: string;
+  productName?: string;
+  amountFen: number;
+  orderStatus: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  qrCodeContent?: string;
+  payUrl?: string;
+  paymentExpiresAt?: string;
+  /** 对公转账信息 (BANK_TRANSFER 时), 形状为后端嵌套对象 */
+  bankTransferInfo?: Record<string, unknown>;
+}
+
+/** 我的订单列表行 (toOrderMap)。 */
+export interface OrderListItem {
+  id: string;
+  bizOrderId?: string;
+  productName?: string;
+  amountCent: number;
+  originalPriceCent?: number;
+  discountRate?: string;
+  paymentMethod?: string;
+  payStatus: string;
+  commissionStatus?: string;
+  issueStatus?: string;
+  channelCode?: string;
+  createdAt?: string;
+  payTime?: string;
+}
+
+/** @deprecated 旧形状与任何真实端点都不符; buy/状态查询改用 BuyResponse, 列表用 OrderListItem。 */
+export type Order = BuyResponse;
+
+/** @deprecated getOrderStatus 现返回 BuyResponse (无 status 字段)。 */
+export type OrderStatus = BuyResponse;
 
 // =============================================================================
 // Wallet (钱包)
 // =============================================================================
 
-/** 钱包统计。金额使用 string (Go json.Number) 避免浮点精度丢失 (金融安全) */
+// Go wallet.go 用 float64 (非 json.Number) → wire 是 JSON 数字, 故用 number (与全局 amount=string 约定不同, 因为这是 Go float64 端点)。
+/** 钱包统计。 */
 export interface WalletStats {
-  balance: string;
-  monthlyConsumption: string;
-  monthlyRecharge: string;
+  balance: number;
+  monthlyConsumption: number;
+  monthlyRecharge: number;
   transactionCount: number;
 }
 
@@ -173,7 +231,7 @@ export interface WalletStats {
 export interface Transaction {
   id: string;
   type: string;
-  amount: string;
+  amount: number;
   remark?: string;
   createdAt: string;
 }

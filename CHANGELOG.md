@@ -5,6 +5,40 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-06-04 — 会员订阅查询 + 后端契约类型修正 + WS 一次性 ticket 鉴权
+
+新增会员订阅查询能力 + chat_bridge scope，并修正一批此前与后端不符（运行时即为 `undefined`）的计费/订单/钱包/余额/通知类型形状。**破坏性 = 类型修正**：被修正的类型字段名 / 类型发生变化，但它们此前本就拿不到正确运行时值，对真正生效的调用代码无功能回退。
+
+### Fixed
+
+- **`BalanceDetail` 形状对齐网关 `InternalBalanceResponse`** — 改为 `userId` / `tokenRemaining` / `tokenTotal` / `callRemaining` / `callTotal` / `entitlements[]`，与网关真实下发结构逐字段对齐（此前字段名与后端不符，`getBalanceDetail` 读出 `undefined`）。
+- **`getOrderStatus` / `waitForPayment` 改用 `BuyResponse.paymentStatus`（修死循环）** — 旧实现读不存在的状态字段，`waitForPayment` 永远拿不到终态导致轮询死循环；改读 `BuyResponse.paymentStatus`。
+- **`PayPayload.payMethod` → `paymentMethod`** — 字段名对齐后端，并补齐枚举值 `WECHAT_NATIVE` / `ALIPAY_PRECREATE` / `BANK_TRANSFER` 与 `deviceId` / `clientRequestId` 字段。
+- **`TokenPackage` 对齐 `toProductView`** — 字段形状与网关 `toProductView` 输出一致。
+- **`Order` 拆为 `BuyResponse` / `OrderListItem`** — 下单返回与订单列表项是两套不同形状，不再用单一 `Order` 混淆。
+- **`WalletStats` / `Transaction` `amount` 由 `string` 改 `number`** — 与后端实际下发类型对齐（此前 string 假设导致消费方误用）。
+- **consume-records 分页修正** — 网关已修为 `records` / `total` / `page` / `pageSize`，SDK 类型与解析同步对齐。
+- **`EntitlementItem.createdAt` 改为可选 + 新增 `activatedAt`** — 与后端 optional 语义对齐。
+- **`ConsumeRecord` 补缓存字段** — 补齐网关下发的缓存相关字段。
+- **notifications WebSocket 改用一次性 `stream-ticket` 取代 URL `?token=` JWT** — 杜绝长效 JWT 经 query string 进入 nginx access log / 代理日志 / 浏览器历史的泄露面，同时修复 WS 鉴权链路。
+
+### Added
+
+- **`subscription.getMembership()` / `getSubscriptionTier()` / `subscriptionPrecheck()`** — C 端会员订阅查询：当前会员视图 / 订阅档位 / 升级前置校验。
+- **auth `ScopeChatBridge`（+ `:read` / `:write` / `:rotate` 三子项）+ `chatBridgeScopes()`** — chat_bridge 第三方聊天平台桥接 scope（Phase 7B 后端落地配套）。
+- **`ManagedModel` 档位门控字段** — `locked` / `freeTier` / `minPlanTier` / `chatRuntimeSupported` / `defaultToolIds`，供 C 端聊天模型选择器按会员档位加锁 / 分区。
+
+### Deprecated
+
+- **`subscription.listUserSubscriptions`** — 改用 `getMembership()`。
+- **`ModelCoefficient` / `listCoefficients`** — 系数退役，端点恒返回空。
+- **`ManagedModel.pricePerMTok` / `isDefault`** — 公开端点不返回这两个字段。
+- **notifications `registerDevice` / `unregisterDevice` / `list` + `updateNotificationPreference`** — 标 `@experimental`（网关当前无对应端点）。
+
+### Breaking（类型修正）
+
+- 上述被修正的类型形状（`BalanceDetail` / `Order` → `BuyResponse`·`OrderListItem` / `OrderStatus` / `TokenPackage` / `PayPayload` / `WalletStats` / `Transaction`）此前与后端不符——运行时即为 `undefined` 或错配。修正后字段名 / 类型发生变化（故标 minor 内的破坏性类型修正）；按新形状重新读取即可，对此前依赖错误字段的代码本就无有效运行时数据。
+
 ## [2.5.1] - 2026-05-31 — 模型 adapter 格式一致性护栏（行为加固 patch，向后兼容）
 
 `getAdapterForModel` 路由加固：`preferred_format` 现仅在**确被 `supported_formats` 收录**时才采信（或 `supported_formats` 未声明时维持原样）。防止上游元数据漂移（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）把 SDK 路由到模型并不支持的格式端点，撞 `/anthropic`「未绑定 Anthropic」4xx。这是网关侧「同 model_id 双 profile 选行」根因修复在 SDK 侧的同构护栏。
