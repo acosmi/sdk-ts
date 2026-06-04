@@ -169,10 +169,23 @@ export interface ManagedModel {
   modelId: string;
   maxTokens: number;
   isEnabled: boolean;
+  /** @deprecated 公开 /managed-models 端点不返回此字段 (最小暴露原则); 仅 admin 响应或历史端口残留, listModels() 结果中恒为 undefined。 */
   pricePerMTok?: number;
+  /** @deprecated 公开 /managed-models 端点不返回此字段 (最小暴露原则); 仅 admin 响应或历史端口残留, listModels() 结果中恒为 undefined。 */
   isDefault?: boolean;
   contextWindow?: number;
   capabilities: ModelCapabilities;
+
+  /** P1 商品化档位门控: 0=FREE..4=ULTRA。前端模型选择器按用户档位过滤。 */
+  minPlanTier?: number;
+  /** 该模型能否在 C 端对话 (ADK 托管运行时) 使用; false 时选择器应过滤。 */
+  chatRuntimeSupported?: boolean;
+  /** 模型默认绑定的工具 ID 列表。 */
+  defaultToolIds?: string[];
+  /** 该模型对当前用户档位是否被限制策略锁定 (limit_policy allowedModels 不含)。true=展示但置灰+升级引导。enforced 关/解析失败=false。 */
+  locked?: boolean;
+  /** 是否属于"免费会员可用"分区 (FREE 档 allowedModels 内)。与当前用户档位无关 (仅分类)。 */
+  freeTier?: boolean;
 
   /**
    * 上游 gateway 为此模型启用的请求格式列表

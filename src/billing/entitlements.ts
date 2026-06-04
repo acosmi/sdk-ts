@@ -31,8 +31,10 @@ declare module '@acosmi/sdk-ts' {
     getByModel(modelID: string, signal?: AbortSignal): Promise<ModelByQuotaResponse>;
     /** 列出当前用户的全部桶 */
     listBuckets(signal?: AbortSignal): Promise<ModelBucket[]>;
+    /** @deprecated 系数已退役, 网关恒返回 []。*/
     /** 拉取模型系数表; SDK 自带 8s TTL 内存缓存以减小调用风暴. */
     listCoefficients(signal?: AbortSignal): Promise<ModelCoefficient[]>;
+    /** @deprecated 系数已退役, 网关恒返回 []。*/
     /** 手动失效系数缓存 (admin 调价后建议立即调一次) */
     invalidateCoefficientCache(): void;
   }

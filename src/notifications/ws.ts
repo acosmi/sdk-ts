@@ -5,6 +5,7 @@
 //
 // Go 用 gorilla/websocket, TS 用全局 WebSocket constructor。
 
+import type { APIResponse } from '../shared/api-response';
 import type { WSEvent } from './types';
 import { Client } from '../core/client';
 
@@ -146,26 +147,29 @@ function getWebSocketCtor(): typeof WebSocket {
 }
 
 async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
-  const token = await c.ensureToken(ws.abort.signal);
   const url = wsURL(c);
   const WSCtor = getWebSocketCtor();
 
-  // 构造连接 — 浏览器 WebSocket 不支持自定义 header,
-  // Authorization 改走 query string 子协议或 cookie (服务端约定).
-  // Go 端 header 'Authorization: Bearer <token>'.
-  // TS 跨端方案: token 放 URL query (?token=) 或 Sec-WebSocket-Protocol 子协议.
-  // 此处用 query, 与 Go 端不完全等价 — 服务端需对应支持.
-  // 注: Node 22+ ws 模块通常支持 options.headers; 浏览器不支持.
+  // 鉴权 — 一次性 stream ticket 流程 (D7 根因修复).
+  // 网关 /ws 守卫为 StreamTicketOr(...): 优先消费 ?ticket=, 回退读 Authorization
+  // **请求头** (extractBearerToken), 而非旧实现假设的 ?token= query。浏览器原生
+  // WebSocket 无法传自定义 header, 故旧的 ?token= 既对浏览器失效, 又把长效 JWT
+  // 明文暴露在反代/网关/devtools 的 access log 里。
   //
-  // ⚠️ 安全风险 (D7, 待后续批次): access_token 放在 URL query string 会被反向代理 /
-  // 网关 / 浏览器开发者工具的 access log 明文记录, 存在泄露风险。浏览器原生 WebSocket
-  // 无法传自定义 header, 这是当前跨端约束下的折中方案; 真正修复需服务端支持
-  // Sec-WebSocket-Protocol 子协议携带 token 或短时一次性 ticket。本批不改实现。
-  const u = new URL(url);
-  u.searchParams.set('token', token);
+  // 现改为: 每次 (重)连接前用已鉴权客户端 POST /ws/stream-ticket 换一张短时
+  // 一次性 ticket (~30-60s TTL, 单次使用), 放入 ?ticket= query。ticket 即便落日志
+  // 也已失效, 不泄露长效凭证。重连必须重新铸新 ticket (旧 ticket 已被消费/过期)。
+  const ticketResp = await c.doJSON<APIResponse<{ ticket: string; expiresIn: number }>>(
+    'POST',
+    '/ws/stream-ticket',
+    null,
+    ws.abort.signal,
+  );
+  const ticket = ticketResp.data.ticket;
 
-  // Node ws 包 / 浏览器 WebSocket 都支持 1 个 protocols 参数,
-  // 我们额外通过 Sec-WebSocket-Protocol 携带 token (可选).
+  const u = new URL(url);
+  u.searchParams.set('ticket', ticket);
+
   let conn: WebSocket;
   try {
     conn = new WSCtor(u.toString());

@@ -2,8 +2,8 @@
 
 import type { APIResponse, YudaoPageResult } from '../shared/api-response';
 import type {
-  Order,
-  OrderStatus,
+  BuyResponse,
+  OrderListItem,
   PayPayload,
   TokenPackage,
 } from './types';
@@ -18,17 +18,18 @@ declare module '@acosmi/sdk-ts' {
     /** 获取流量包详情 */
     getTokenPackageDetail(packageID: string, signal?: AbortSignal): Promise<TokenPackage>;
     /** 购买流量包 (创建订单) */
-    buyTokenPackage(packageID: string, payload: PayPayload | null, signal?: AbortSignal): Promise<Order>;
+    buyTokenPackage(packageID: string, payload: PayPayload | null, signal?: AbortSignal): Promise<BuyResponse>;
     /** 查询订单支付状态 */
-    getOrderStatus(orderID: string, signal?: AbortSignal): Promise<OrderStatus>;
+    getOrderStatus(orderID: string, signal?: AbortSignal): Promise<BuyResponse>;
     /** 查询我的订单列表 */
-    listMyOrders(signal?: AbortSignal): Promise<Order[]>;
+    listMyOrders(signal?: AbortSignal): Promise<OrderListItem[]>;
     /**
      * 轮询订单支付状态直到终态
-     * 成功支付返回 status; 终态失败抛 OrderTerminalError
+     * 成功支付返回 BuyResponse; 终态失败抛 OrderTerminalError
+     * 终态判定基于 paymentStatus (回退 orderStatus)
      * pollIntervalMs <= 0 时默认 2 秒
      */
-    waitForPayment(orderID: string, pollIntervalMs: number, signal?: AbortSignal): Promise<OrderStatus>;
+    waitForPayment(orderID: string, pollIntervalMs: number, signal?: AbortSignal): Promise<BuyResponse>;
   }
 }
 
@@ -65,7 +66,7 @@ Client.prototype.buyTokenPackage = async function (
   signal?: AbortSignal,
 ) {
   const body = payload ?? null;
-  const resp = await this.doJSON<APIResponse<Order>>(
+  const resp = await this.doJSON<APIResponse<BuyResponse>>(
     'POST',
     `/token-packages/${encodeURIComponent(packageID)}/buy`,
     body,
@@ -79,7 +80,7 @@ Client.prototype.getOrderStatus = async function (
   orderID: string,
   signal?: AbortSignal,
 ) {
-  const resp = await this.doJSON<APIResponse<OrderStatus>>(
+  const resp = await this.doJSON<APIResponse<BuyResponse>>(
     'GET',
     `/token-packages/orders/${encodeURIComponent(orderID)}/status`,
     null,
@@ -91,10 +92,10 @@ Client.prototype.getOrderStatus = async function (
 Client.prototype.listMyOrders = async function (this: Client, signal?: AbortSignal) {
   const raw = await this.doJSON<APIResponse<unknown>>('GET', '/token-packages/my', null, signal);
   if (raw.data && typeof raw.data === 'object' && 'list' in raw.data) {
-    const page = raw.data as YudaoPageResult<Order>;
+    const page = raw.data as YudaoPageResult<OrderListItem>;
     if (Array.isArray(page.list)) return page.list;
   }
-  if (Array.isArray(raw.data)) return raw.data as Order[];
+  if (Array.isArray(raw.data)) return raw.data as OrderListItem[];
   throw new Error('decode orders: unexpected shape');
 };
 
@@ -107,9 +108,10 @@ Client.prototype.waitForPayment = async function (
   if (pollIntervalMs <= 0) pollIntervalMs = 2000;
   while (true) {
     const status = await this.getOrderStatus(orderID, signal);
-    if (isOrderTerminal(status.status)) {
-      if (isOrderSuccess(status.status)) return status;
-      throw new OrderTerminalError(orderID, status.status);
+    const st = status.paymentStatus ?? status.orderStatus;
+    if (isOrderTerminal(st)) {
+      if (isOrderSuccess(st)) return status;
+      throw new OrderTerminalError(orderID, st);
     }
     await sleepWithSignal(pollIntervalMs, signal);
   }

@@ -92,6 +92,7 @@ export function findDesktopVisualUnderstandingModel(
   }
   if (candidates.length === 0) return null;
   for (const m of candidates) {
+    // 注: 公开 listModels() 不返回 isDefault, 此分支仅对 admin 上下文调用方生效; 公开数据下会落到 catalog 顺序首个 (可接受)。
     if (m.isDefault === true) return m;
   }
   return candidates[0];
