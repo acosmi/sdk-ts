@@ -31,7 +31,32 @@ export interface SubscriptionPlan {
   grantPolicyDigest?: Record<string, unknown> | null;
 }
 
-/** 用户当前订阅状态 (P3 商品中心会扩展) */
+/** C 端会员中心订阅概览 — 严格对齐网关 GET /entitlements/membership (membership.go membershipResponse)。 */
+export interface Membership {
+  hasActive: boolean;
+  planCode: string;
+  planName: string;
+  tier: string;
+  billingCycle: string;
+  status: string;
+  expiresAt: string;
+  priceFen: number;
+  tokenQuota: number;
+  /** 当前周期已用 token (后端 float64) */
+  tokenUsed: number;
+  periodStart: string;
+  /** isFree = !hasActive (无活跃付费订阅即免费档) */
+  isFree: boolean;
+}
+
+/** 由活跃权益推导的订阅层级 — 对齐网关 GET /entitlements/subscription (entitlement.go GetSubscription)。 */
+export interface SubscriptionTier {
+  /** "free" | "pro" (后端按权益类型推导) */
+  subscriptionType: string;
+  activeEntitlementTypes: string[];
+}
+
+/** @deprecated 网关未暴露订阅列表端点; 该形状不对应任何真实响应。请改用 Membership + getMembership()。保留仅为向后兼容。 */
 export interface UserSubscription {
   id: number;
   userId: string;

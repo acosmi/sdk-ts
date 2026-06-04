@@ -62,9 +62,22 @@ describe('WebSocket 重复 connect 不泄漏旧连接', () => {
   beforeEach(() => {
     MockWebSocket.instances = [];
     (globalThis as { WebSocket?: unknown }).WebSocket = MockWebSocket as unknown;
+    // wsConnectOnce 现在每次连接前 POST /ws/stream-ticket 换取一次性票据
+    // (D7 根因修复, 取代旧的 ?token= URL 鉴权)。stub fetch 返回票据, 让本测试
+    // 在无真实网络下继续验证重连不泄漏的逻辑。
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ code: 0, data: { ticket: 'tkt-test', expiresIn: 60 } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
   });
   afterEach(async () => {
     (globalThis as { WebSocket?: unknown }).WebSocket = originalWS;
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 

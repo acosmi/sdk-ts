@@ -27,12 +27,16 @@ declare module '@acosmi/sdk-ts' {
     /** 删除通知 */
     deleteNotification(id: string, signal?: AbortSignal): Promise<void>;
     /** 注册推送设备 token */
+    /** @experimental 网关尚未提供 /devices/* 与 /notification-preferences/* 端点, 调用将 404。后端实现落地前请勿在生产使用。 */
     registerDevice(reg: DeviceRegistration, signal?: AbortSignal): Promise<void>;
     /** 注销推送设备 token */
+    /** @experimental 网关尚未提供 /devices/* 与 /notification-preferences/* 端点, 调用将 404。后端实现落地前请勿在生产使用。 */
     unregisterDevice(token: string, signal?: AbortSignal): Promise<void>;
     /** 获取通知偏好设置 */
+    /** @experimental 网关尚未提供 /devices/* 与 /notification-preferences/* 端点, 调用将 404。后端实现落地前请勿在生产使用。 */
     listNotificationPreferences(signal?: AbortSignal): Promise<NotificationPreference[]>;
     /** 更新通知偏好 */
+    /** @experimental 网关尚未提供 /devices/* 与 /notification-preferences/* 端点, 调用将 404。后端实现落地前请勿在生产使用。 */
     updateNotificationPreference(
       typeCode: string,
       pref: NotificationPreference,
