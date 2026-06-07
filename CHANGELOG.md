@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 上述被修正的类型形状（`BalanceDetail` / `Order` → `BuyResponse`·`OrderListItem` / `OrderStatus` / `TokenPackage` / `PayPayload` / `WalletStats` / `Transaction`）此前与后端不符——运行时即为 `undefined` 或错配。修正后字段名 / 类型发生变化（故标 minor 内的破坏性类型修正）；按新形状重新读取即可，对此前依赖错误字段的代码本就无有效运行时数据。
 
+### Docs（文档准确性修正）
+
+- **额度单位双体系文档化** — 计费/订阅域所有 `token*` 字段（`tokenQuota`/`tokenRemaining`/`tokenUsed`/`tokenTotal`）单位取决于权益是否付费：**免费档 = 原始 Token（TK 体系）**，**付费会员（`type ∈ {TOKEN_PACKAGE, SUBSCRIPTION}`）= 微 Credits（÷1000 = Credits 代币）**。在 `EntitlementBalance` / `EntitlementItem` / `BalanceDetail` / `Membership` / `SubscriptionPlan` 类型注释与 README「钱包 + 余额」一节补充该语义，明确**两者单位不同、绝不可跨单位求和**，判据为权益 `type`。档位标准额度 BASIC 0.6 亿 / PRO 3 亿 / PRO_MAX 9 亿 / ULTRA 24 亿 Credits。
+- **README 钱包示例修正** — `getWalletStats` 输出由 string 改为 number（对齐本版 `WalletStats` float64）并补 `transactionCount`；`buyTokenPackage` 示例由错误的 `{ payMethod: 'wechat' }` 改为 `{ paymentMethod: 'WECHAT_NATIVE' }`；`waitForPayment` 由不存在的 `order.id` 改为 `String(order.orderId)`（`BuyResponse` 用 `orderId`/`orderNo`，无 `id`）。
+
 ## [2.5.1] - 2026-05-31 — 模型 adapter 格式一致性护栏（行为加固 patch，向后兼容）
 
 `getAdapterForModel` 路由加固：`preferred_format` 现仅在**确被 `supported_formats` 收录**时才采信（或 `supported_formats` 未声明时维持原样）。防止上游元数据漂移（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）把 SDK 路由到模型并不支持的格式端点，撞 `/anthropic`「未绑定 Anthropic」4xx。这是网关侧「同 model_id 双 profile 选行」根因修复在 SDK 侧的同构护栏。

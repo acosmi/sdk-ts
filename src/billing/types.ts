@@ -9,8 +9,15 @@
 // =============================================================================
 // Entitlements
 // =============================================================================
+//
+// ⚠️ 额度单位双体系: 本域所有 token* 字段 (tokenQuota/tokenRemaining/tokenUsed/
+// tokenTotal) 的单位取决于权益是否付费 ——
+//   - 免费档 (TK 体系): type 非 TOKEN_PACKAGE/SUBSCRIPTION 的权益, 数值 = 原始 Token。
+//   - 付费会员 (Credits 代币体系): type ∈ {TOKEN_PACKAGE, SUBSCRIPTION}, 数值 = 微 Credits,
+//     ÷1000 = Credits (代币)。档位标准额度 BASIC 0.6亿 / PRO 3亿 / PRO_MAX 9亿 / ULTRA 24亿 Credits。
+// 因此绝不能把免费区与付费区的 token* 直接求和 (单位不同)。判据 = EntitlementItem.type。
 
-/** 权益余额 (聚合) */
+/** 权益余额 (聚合)。token* 单位双体系: 免费=Token / 付费(TOKEN_PACKAGE,SUBSCRIPTION)=微Credits(÷1000=Credits)。 */
 export interface EntitlementBalance {
   totalTokenQuota: number;
   totalTokenUsed: number;
@@ -21,9 +28,10 @@ export interface EntitlementBalance {
   activeEntitlements: number;
 }
 
-/** 单条权益明细 */
+/** 单条权益明细。token* 单位由 type 决定: TOKEN_PACKAGE/SUBSCRIPTION=微Credits(÷1000=Credits), 其余=原始Token。 */
 export interface EntitlementItem {
   id: string;
+  /** 权益类型, 也是额度单位判据: TOKEN_PACKAGE/SUBSCRIPTION → 付费(Credits 体系), 其余 → 免费(Token 体系)。 */
   type: string;
   status: string;
   tokenQuota: number;
@@ -52,7 +60,7 @@ export interface BalanceDetailEntitlement {
   expiresAt?: string;
 }
 
-/** 详细余额 (含每条权益明细) */
+/** 详细余额 (含每条权益明细)。token* 单位双体系: 免费=Token / 付费=微Credits(÷1000=Credits), 按 entitlements[].id 对应权益 type 区分, 勿跨单位求和。 */
 export interface BalanceDetail {
   userId: string;
   tokenRemaining: number;
