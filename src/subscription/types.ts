@@ -18,6 +18,7 @@ export interface SubscriptionPlan {
   planDesc: string;
   billingCycle: string;
   basePriceFen: number;
+  /** 档位标准额度。付费档单位 = 微 Credits (÷1000 = Credits): BASIC 0.6亿 / PRO 3亿 / PRO_MAX 9亿 / ULTRA 24亿 Credits。 */
   tokenQuota: number;
   seatMin?: number | null;
   seatMax?: number | null;
@@ -41,8 +42,9 @@ export interface Membership {
   status: string;
   expiresAt: string;
   priceFen: number;
+  /** 周期总额度。有活跃付费订阅 (hasActive=true) 时单位 = 微 Credits (÷1000 = Credits 代币); 免费档 = 原始 Token。 */
   tokenQuota: number;
-  /** 当前周期已用 token (后端 float64) */
+  /** 当前周期已用 (后端 float64)。单位同 tokenQuota: 付费=微Credits / 免费=Token。 */
   tokenUsed: number;
   periodStart: string;
   /** isFree = !hasActive (无活跃付费订阅即免费档) */

@@ -601,16 +601,32 @@ console.log('sidecar →', sidecar.modelId);
 ### 示例：钱包 + 余额 + 流量包购买
 
 ```ts
-// 金额字段是 string（Go json.Number 端口，避免浮点精度丢失）
+// WalletStats 金额字段是 number（Go float64 端点 wallet.go；非 json.Number）
 const stats = await client.getWalletStats();
-// { balance: "100.00", monthlyConsumption: "32.50", monthlyRecharge: "150.00" }
+// { balance: 100.0, monthlyConsumption: 32.5, monthlyRecharge: 150.0, transactionCount: 12 }
 
-const balance = await client.getBalance();             // 聚合权益余额
+const balance = await client.getBalance();             // 聚合权益余额（EntitlementBalance）
 
 const pkgs = await client.listTokenPackages();
-const order = await client.buyTokenPackage(pkgs[0].id, { payMethod: 'wechat' });
-const status = await client.waitForPayment(order.id, 2000);  // 2s 轮询直到终态
+// PayPayload.paymentMethod 取枚举字面量（'WECHAT_NATIVE' | 'ALIPAY_PRECREATE' | 'BANK_TRANSFER'）
+const order = await client.buyTokenPackage(pkgs[0].id, { paymentMethod: 'WECHAT_NATIVE' });
+// BuyResponse 用 orderId（number）/ orderNo（string），无 .id；waitForPayment 取 string
+const status = await client.waitForPayment(String(order.orderId), 2000);  // 2s 轮询直到终态
 ```
+
+> ⚠️ **额度单位双体系（务必区分，不要跨单位相加）**：`getBalance` / `getBalanceDetail` /
+> `listEntitlements` / `getMembership` 返回的 `token*` 字段（`tokenQuota`/`tokenRemaining`/
+> `tokenUsed`/`tokenTotal`）单位**取决于权益是否付费**：
+>
+> - **免费档（TK 体系）**：`type` 非 `TOKEN_PACKAGE`/`SUBSCRIPTION` 的权益（每月领取的免费额度等），
+>   数值即**原始 Token**，UI 以「千万/万 Token」展示。免费额度通过 `claimMonthlyFree()` 领取。
+> - **付费会员（Credits 代币体系）**：`type` 为 `TOKEN_PACKAGE` / `SUBSCRIPTION` 的权益，数值是
+>   **微 Credits**，**÷1000 = Credits（代币）**，UI 以「亿/万 Credits」展示。各档位标准额度
+>   （BASIC 0.6 亿 / PRO 3 亿 / PRO_MAX 9 亿 / ULTRA 24 亿 Credits）即按 Credits 计。
+>
+> 因此**绝不能把免费区与付费区的 `token*` 数值直接求和**——两者单位不同（Token vs 微Credits）。
+> 判定付费区的唯一判据是权益 `type ∈ {TOKEN_PACKAGE, SUBSCRIPTION}`。`getMembership()` 的
+> `tokenQuota`/`tokenUsed` 在有活跃付费订阅（`hasActive=true`）时同为微 Credits。
 
 ### 示例：Bug Report（CrabCode CLI 反馈端点）
 
