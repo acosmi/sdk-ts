@@ -5,6 +5,26 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-06-11 — 远控管理面补齐 + BYOK 密钥客户端 + Chat Bridge CRUD（Phase 7B）
+
+补齐远控核心交互之外的全部管理面（此前下游 CrabCode 只能裸 fetch），新增 BYO 模型密钥客户端，落地 chat-bridge integration/credential 管理面 CRUD——云端控制台与下游调用的是同一组端点同一份租户隔离数据，天然互通。全部方法逐字段对齐 nexus-v4 handler 真实 wire 形状（契约 §12/§14/§18 附录 A）。
+
+### Added
+
+- **`agentRuns.list(opts?)`** — 调用者自己的 run 列表（`GET /agent-runs`，Phase 5C 控制台）：`runtime`/`status` 过滤 + `page`/`pageSize` 分页，信封 `{records,total,page,pageSize}`；run view 新增 `runtime`/`runner`/`adapter` 字段（标准 run 缺省），永不含 session token/policy/messages。
+- **`agentRuns.submitPermissionResult(runId, {requestId, decision, reason?})`** — 远控审批决策回写（`POST /:runId/permission-results`）；decision 仅 `approved`|`rejected`（契约 §14），409 = 会话不可用。
+- **`agentRuns.submitUserMessage(runId, {content, requestId?})`** — 会话中途追加用户消息（`POST /:runId/messages`，≤64KB，role 服务端硬编码 user）；返回服务端最终幂等键。
+- **`agentRuns.revealRemoteToken(runId)`** — desktop launcher 一次性 session token（`POST /:runId/remote-token`，Phase 5B；仅 runner=desktop）；响应含 `workspace`（契约 §18.3 r4）。token 永不落浏览器存储。
+- **`AgentRunCreateRequest.byokCredentialRef`** — BYO 密钥引用上 wire（`byok_credential_ref`，仅远控 + cloud runner）。
+- **`client.crabcodeByok`（`CrabCodeByokClient`）** — BYO 模型密钥管理面（契约 §18.2，`/crabcode/byok-credentials`，`remote_control` scope）：`list`/`create`/`rotate`/`revoke`；明文一次性提交，响应恒 masked（ref+fingerprint）。新类型 `ByokProvider`/`ByokCredential`/`ByokCreateRequest`。
+- **`client.chatBridge`（`ChatBridgeClient`，Phase 7B）** — 第三方聊天平台集成/凭证管理面 CRUD：`createIntegration`/`listIntegrations`/`getIntegration`/`updateIntegrationStatus` + `storeCredential`/`listCredentials`/`rotateCredential`/`revokeCredential`。请求体 snake_case（SDK 转换）、响应 camelCase（契约 §12 平面分化）；scope 三档 `chat_bridge:read`/`:write`/`:rotate`。新类型 `CreateIntegrationRequest`/`StoreCredentialRequest`。
+- **metadata 约定键常量** — `AGENT_RUN_META_TITLE`/`AGENT_RUN_META_WORKSPACE`（契约 §18.3 r4：title 列表标题 / workspace 期望项目目录）。
+- **远控管理面类型** — `RemotePermissionDecision`/`RemotePermissionResultRequest`/`RemoteUserMessageRequest`/`RemoteUserMessageAck`/`RemoteSessionTokenGrant`/`AgentRunListOptions`/`AgentRunListResult`。
+
+### Deprecated
+
+- **`ChatIntegration.configJson`** — 服务端从不返回该字段（model `json:"-"`，防 secret 误入后整体不外发），读取恒 `undefined`；写入走 `createIntegration({ configJson })`。
+
 ## [2.6.0] - 2026-06-04 — 会员订阅查询 + 后端契约类型修正 + WS 一次性 ticket 鉴权
 
 新增会员订阅查询能力 + chat_bridge scope，并修正一批此前与后端不符（运行时即为 `undefined`）的计费/订单/钱包/余额/通知类型形状。**破坏性 = 类型修正**：被修正的类型字段名 / 类型发生变化，但它们此前本就拿不到正确运行时值，对真正生效的调用代码无功能回退。

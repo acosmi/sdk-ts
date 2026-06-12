@@ -17,6 +17,8 @@ import {
   type AgentRunCreateRequest,
   type AgentRunCreateResponse,
   type AgentRunDownload,
+  type AgentRunListOptions,
+  type AgentRunListResult,
   type AgentRunLocalToolHandler,
   type AgentRunLocalToolResult,
   type AgentRunRemoteCreateRequest,
@@ -32,6 +34,10 @@ import {
   type AdapterKind,
   type PermissionPolicy,
   type RemoteControlEvent,
+  type RemotePermissionResultRequest,
+  type RemoteSessionTokenGrant,
+  type RemoteUserMessageAck,
+  type RemoteUserMessageRequest,
   type RunnerKind,
   type WorkspacePolicy,
 } from './remote-control';
@@ -73,6 +79,37 @@ export class AgentRunsClient {
       { retryOn401: false },
     );
     return fromWireCreateResponse(resp);
+  }
+
+  /**
+   * List the caller's own agent runs, newest first (GET /agent-runs, Phase 5C
+   * console). Returns view metadata only — never session tokens, policies or
+   * messages (contract §6). Filter remote-control runs with
+   * `{ runtime: 'crabcode_remote' }`.
+   */
+  async list(
+    opts: AgentRunListOptions = {},
+    signal?: AbortSignal,
+  ): Promise<AgentRunListResult> {
+    const params = new URLSearchParams();
+    if (opts.runtime) params.set('runtime', opts.runtime);
+    if (opts.status) params.set('status', opts.status);
+    if (opts.page != null) params.set('page', String(opts.page));
+    if (opts.pageSize != null) params.set('page_size', String(opts.pageSize));
+    const qs = params.toString();
+    const resp = await this.requestAPI<WireAgentRunListResult>(
+      'GET',
+      `/agent-runs${qs ? `?${qs}` : ''}`,
+      null,
+      signal,
+      { retryOn401: true },
+    );
+    return {
+      records: (resp.records ?? []).map(fromWireRun),
+      total: typeof resp.total === 'number' ? resp.total : 0,
+      page: typeof resp.page === 'number' ? resp.page : 1,
+      pageSize: typeof resp.pageSize === 'number' ? resp.pageSize : 20,
+    };
   }
 
   get(runId: string, signal?: AbortSignal): Promise<AgentRun> {
@@ -148,6 +185,87 @@ export class AgentRunsClient {
   ): AsyncIterable<RemoteControlEvent> {
     return {
       [Symbol.asyncIterator]: () => this.streamRemoteControlGen(runId, signal),
+    };
+  }
+
+  /**
+   * Submit a permission decision for a pending `permission_request` event
+   * (POST /agent-runs/:runId/permission-results, contract §4/§9/§14).
+   *
+   * Only `approved` | `rejected` may be submitted by clients — `timeout` /
+   * `cancelled` are produced server-side. Requires an OAuth token with the
+   * explicit `remote_control` scope (or a web JWT). 409 means the remote
+   * session is gone (e.g. already terminated).
+   */
+  async submitPermissionResult(
+    runId: string,
+    result: RemotePermissionResultRequest,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.requestAPI<{ ok?: boolean }>(
+      'POST',
+      `/agent-runs/${encodeURIComponent(runId)}/permission-results`,
+      {
+        request_id: result.requestId,
+        decision: result.decision,
+        reason: result.reason,
+      },
+      signal,
+      { retryOn401: false },
+    );
+  }
+
+  /**
+   * Append a mid-session user message to a remote run
+   * (POST /agent-runs/:runId/messages, Phase 5C). The message role is
+   * hard-coded to 'user' server-side (contract §6 #5 prompt-injection
+   * defence); content is limited to 64KB. Requires the explicit
+   * `remote_control` scope (or a web JWT).
+   */
+  async submitUserMessage(
+    runId: string,
+    message: RemoteUserMessageRequest,
+    signal?: AbortSignal,
+  ): Promise<RemoteUserMessageAck> {
+    const resp = await this.requestAPI<{ ok?: boolean; request_id?: string }>(
+      'POST',
+      `/agent-runs/${encodeURIComponent(runId)}/messages`,
+      { request_id: message.requestId, content: message.content },
+      signal,
+      { retryOn401: false },
+    );
+    return {
+      ok: resp?.ok === true,
+      requestId: resp?.request_id ?? message.requestId ?? '',
+    };
+  }
+
+  /**
+   * Reveal the one-shot remote session token for a desktop-runner run
+   * (POST /agent-runs/:runId/remote-token, Phase 5B; contract §18.1).
+   *
+   * Desktop launcher only: the token is single-consumption (a second call
+   * returns 409) and must never touch browser storage — receive it in the
+   * native layer and inject it into the CrabCode child-process env only
+   * (contract §6). Cloud / local_embedded runners never expose tokens over
+   * HTTP (403). Requires the explicit `remote_control` scope.
+   */
+  async revealRemoteToken(
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<RemoteSessionTokenGrant> {
+    const resp = await this.requestAPI<WireRemoteSessionTokenGrant>(
+      'POST',
+      `/agent-runs/${encodeURIComponent(runId)}/remote-token`,
+      {},
+      signal,
+      { retryOn401: false },
+    );
+    return {
+      accessToken: resp?.access_token ?? '',
+      sessionUrl: resp?.session_url ?? '',
+      tenantId: resp?.tenant_id ?? '',
+      workspace: resp?.workspace || undefined,
     };
   }
 
@@ -490,6 +608,7 @@ interface WireAgentRunCreateRequest {
   adapter?: AdapterKind;
   permission_policy?: WirePermissionPolicy;
   workspace_policy?: WireWorkspacePolicy;
+  byok_credential_ref?: string;
 }
 
 interface WirePermissionPolicy {
@@ -519,6 +638,26 @@ interface WireAgentRun {
   completed_at?: string;
   error?: unknown;
   metadata?: Record<string, string>;
+  // 远控 view 元数据 (Phase 5C; 标准 run 缺省)。
+  runtime?: string;
+  runner?: string;
+  adapter?: string;
+}
+
+// List 分页信封 — 外层键对齐 listConsumeRecords ({records,total,page,pageSize},
+// 注意 pageSize 是 camelCase), records 内元素仍为 snake_case 的 run view。
+interface WireAgentRunListResult {
+  records?: WireAgentRun[];
+  total?: number;
+  page?: number;
+  pageSize?: number;
+}
+
+interface WireRemoteSessionTokenGrant {
+  access_token?: string;
+  session_url?: string;
+  tenant_id?: string;
+  workspace?: string;
 }
 
 interface WireAgentRunCreateResponse {
@@ -587,6 +726,7 @@ function toWireCreateRequest(req: AgentRunCreateRequest): WireAgentRunCreateRequ
     adapter: req.adapter,
     permission_policy: req.permissionPolicy ? toWirePermissionPolicy(req.permissionPolicy) : undefined,
     workspace_policy: req.workspacePolicy ? toWireWorkspacePolicy(req.workspacePolicy) : undefined,
+    byok_credential_ref: req.byokCredentialRef,
     artifact_policy: req.artifactPolicy
       ? {
           enabled: req.artifactPolicy.enabled,
@@ -625,6 +765,9 @@ function fromWireRun(resp: WireAgentRun): AgentRun {
     completedAt: resp.completed_at,
     error: normalizeError(resp.error),
     metadata: resp.metadata,
+    runtime: resp.runtime,
+    runner: resp.runner,
+    adapter: resp.adapter,
   };
 }
 

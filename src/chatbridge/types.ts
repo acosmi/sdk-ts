@@ -136,8 +136,7 @@ export interface BridgeThreadRef {
 /**
  * ChatIntegration — 平台安装记录的 SDK 只读视图.
  *
- * 注意: `configJson` 仅含非敏感配置 (rate limit / feature toggles); 严禁含 secret。
- * Phase 7B handler 落地后, SDK admin 子客户端会按此型号 GET。
+ * Phase 7B 起由 `client.chatBridge` 按此型号 GET (响应 camelCase, 契约 §12)。
  */
 export interface ChatIntegration {
   id: string;
@@ -148,6 +147,10 @@ export interface ChatIntegration {
   workspaceIdHash?: string;
   botIdHash?: string;
   status: IntegrationStatus;
+  /**
+   * @deprecated 服务端从不返回此字段 (model ConfigJSON json:"-", 防 secret 误入
+   * 后整体不外发) — 读取恒为 undefined。写入走 createIntegration({ configJson })。
+   */
   configJson?: string;
   installedByUserId?: string;
   lastUsedAt?: string;

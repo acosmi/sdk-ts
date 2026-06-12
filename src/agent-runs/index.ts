@@ -14,3 +14,6 @@ export * from './remote-control';
 
 // === 子客户端 (导出类 + declaration-merge agentRuns getter 到 Client.prototype) ===
 export { AgentRunsClient } from './client';
+
+// === BYO 模型密钥管理面 (契约 §18.2; declaration-merge crabcodeByok getter) ===
+export * from './byok';

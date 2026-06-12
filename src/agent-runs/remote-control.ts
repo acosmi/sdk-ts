@@ -343,3 +343,59 @@ export function parseRemoteControlEvent(raw: unknown): RemoteControlEvent | null
 export function isTerminalRemoteEvent(ev: RemoteControlEvent): boolean {
   return ev.type === 'done' || ev.type === 'settle';
 }
+
+// =============================================================================
+// 远控管理面请求/响应类型 (契约 §18.1 附录 A; Phase 5B/5C)
+// =============================================================================
+
+/**
+ * C 端/平台可下达的 permission 决策 (契约 §14)。
+ *
+ * 仅 `approved` | `rejected` — `timeout` / `cancelled` 由服务端 reaper/cancel
+ * 路径产生, 客户端不可下达。
+ */
+export type RemotePermissionDecision = 'approved' | 'rejected';
+
+/** `agentRuns.submitPermissionResult()` 请求 — 回写 permission_request 的决策。 */
+export interface RemotePermissionResultRequest {
+  /** 对应 permission_request 事件的 requestId。 */
+  requestId: string;
+  decision: RemotePermissionDecision;
+  /** 可选决策理由 (透传给 CrabCode control_response)。 */
+  reason?: string;
+}
+
+/** `agentRuns.submitUserMessage()` 请求 — 会话中途追加用户消息 (Phase 5C 输入框)。 */
+export interface RemoteUserMessageRequest {
+  /** 消息正文; 服务端上限 64KB。Role 由服务端硬编码 'user' (契约 §6 #5 防注入)。 */
+  content: string;
+  /** 幂等键; 缺省由服务端生成并在 ack 中返回。 */
+  requestId?: string;
+}
+
+/** `agentRuns.submitUserMessage()` 确认。 */
+export interface RemoteUserMessageAck {
+  ok: boolean;
+  /** 服务端最终采用的幂等键 (请求未带时为服务端生成值)。 */
+  requestId: string;
+}
+
+/**
+ * `agentRuns.revealRemoteToken()` 响应 — desktop launcher 一次性 session token
+ * (Phase 5B; 仅 runner='desktop')。
+ *
+ * 安全红线 (契约 §6): token 一次性消费 (重复调用 409), TTL ≤ 1h; 永不落
+ * 浏览器存储 (localStorage/cookie), 应由 native 层接收后只注入 CrabCode
+ * 子进程 env。
+ */
+export interface RemoteSessionTokenGrant {
+  accessToken: string;
+  /** CrabCode 回连的 RemoteIO WS 完整地址 (公网 wss 基址 + run 路径 + tenant_id)。 */
+  sessionUrl: string;
+  tenantId: string;
+  /**
+   * 用户在 metadata.workspace 声明的期望项目目录 (契约 §18.3 r4); 缺省 undefined。
+   * 桌面端决定是否 chdir 采纳 (路径不存在/越权时回退并提示)。
+   */
+  workspace?: string;
+}
