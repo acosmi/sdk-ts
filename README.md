@@ -332,12 +332,48 @@ const run = await client.agentRuns.createRemoteRun({
 for await (const ev of client.agentRuns.streamRemoteControl(run.runId)) {
   switch (ev.type) {
     case 'text_delta':         process.stdout.write(ev.text); break;
-    case 'permission_request': /* 渲染审批卡片，回写 permission_result */ break;
+    case 'permission_request': // 渲染审批卡片后回写决策 (仅 approved|rejected, 契约 §14)
+      await client.agentRuns.submitPermissionResult(run.runId, {
+        requestId: ev.requestId, decision: 'approved',
+      });
+      break;
     case 'settle':             console.log('billed', ev.billed); break;
   }
 }
 
+// 会话中途追加用户消息 (role 服务端硬编码 user, ≤64KB)
+await client.agentRuns.submitUserMessage(run.runId, { content: '继续, 用方案B' });
+
 await client.agentRuns.cancel(run.runId); // UI 中止走服务端 cancel control frame，不是 fetch abort
+```
+
+#### 远控管理面（v2.7.0）
+
+| 方法 | 端点 | 说明 |
+| --- | --- | --- |
+| `agentRuns.list(opts?)` | `GET /agent-runs` | 调用者自己的 run 列表（新→旧）；`{ runtime: 'crabcode_remote' }` 过滤远控 run，分页 `{records,total,page,pageSize}`。view 只含元数据，永不含 session token / policy / messages（契约 §6） |
+| `agentRuns.submitPermissionResult(runId, {requestId, decision, reason?})` | `POST /:runId/permission-results` | 回写 `permission_request` 决策；仅 `approved` \| `rejected`（`timeout`/`cancelled` 由服务端产生）。409 = 远控会话已不可用 |
+| `agentRuns.submitUserMessage(runId, {content, requestId?})` | `POST /:runId/messages` | 会话中途追加用户消息；role 服务端硬编码 `user`（契约 §6 #5 防注入），返回服务端最终幂等键 |
+| `agentRuns.revealRemoteToken(runId)` | `POST /:runId/remote-token` | **仅 desktop runner / desktop launcher 用**：一次性 session token（重复调用 409）。token 永不落浏览器存储，native 层接收后只注入 CrabCode 子进程 env；响应含 `workspace`（用户声明的项目目录，契约 §18.3 r4） |
+
+**metadata 约定键（契约 §18.3 r4）**：`metadata.title`（列表显示标题，缺省服务端从 input 首行派生）、`metadata.workspace`（期望项目目录，经 `revealRemoteToken().workspace` 下发给桌面端采纳）。常量 `AGENT_RUN_META_TITLE` / `AGENT_RUN_META_WORKSPACE`。服务端上限 ≤32 条 / 键 ≤64B / 值 ≤2KB。
+
+#### BYOK — 用户自有模型密钥（v2.7.0，契约 §18.2）
+
+`client.crabcodeByok` 管理 BYO 模型密钥（守卫 `remote_control` scope）；创建后把 `credentialRef` 传给 `createRemoteRun({ byokCredentialRef })`（仅 `runner: 'cloud'`）。明文一次性提交、服务端加密落库后即弃，所有读取只回 masked 视图（ref + fingerprint）——解密只发生在网关 cloud runner 启动时的子进程 env 注入点。
+
+```ts
+const cred = await client.crabcodeByok.create({
+  provider: 'deepseek',          // anthropic|openai|deepseek|dashscope|zhipu|volcengine|custom
+  plaintext: process.env.MY_KEY!, // 一次性提交; SDK/服务端永不回传
+  name: '我的 DeepSeek 钥匙',
+});
+await client.agentRuns.createRemoteRun({
+  appId: '', input: '…', runtime: 'crabcode_remote', runner: 'cloud', adapter: 'remote_io',
+  byokCredentialRef: cred.credentialRef,
+});
+await client.crabcodeByok.rotate(cred.credentialRef, 'sk-new'); // ref 不变, fingerprint 更新
+await client.crabcodeByok.revoke(cred.credentialRef);           // 软吊销 + 抹密文, 幂等
 ```
 
 要点：
@@ -357,25 +393,52 @@ await client.agentRuns.cancel(run.runId); // UI 中止走服务端 cancel contro
 - **11 事件 union**（`RemoteControlEvent`，契约 §4）：`text_delta` / `reasoning_delta` / `tool_call` / `tool_result` / `permission_request` / `permission_result` / `usage` / `settle` / `status` / `error` / `done`。`error` **恒为非终结**（终结性错误由 `done.reason`/`done.finalStatus` 承载），`done` / `settle` 才终结流——故 `streamRemoteControl` 不接受 options、从不抛异常；用 `isTerminalRemoteEvent(ev)` 判终结。
 - **辅助导出**：`parseRemoteControlEvent` / `isTerminalRemoteEvent` / `AdapterKind` / `RunnerKind` / `RemoteControlEvent` / `RemoteSessionPlacement` / `PermissionPolicy` / `WorkspacePolicy`（`src/agent-runs/remote-control.ts`）。
 
-## Chat Bridge（第三方聊天平台桥接，v2.1.0 · types-only 骨架，无 client 方法，Phase 7B 后端落地）
+## Chat Bridge（第三方聊天平台桥接，v2.7.0 · Phase 7B 管理面 CRUD 落地）
 
-`chatbridge` 从根入口导出第三方聊天平台（飞书/企微/钉钉/Slack/Teams/Telegram/WhatsApp）接入 Acosmi 远控的**稳定类型契约**。Phase 7 仅交付类型骨架：**SDK 暂无 `client.chatBridge.*` 方法**，平台 webhook/凭证/桥接 handler 是 Phase 7B 后端工作；平台 SDK 依赖留在独立 adapter 包，不进主包。
+`client.chatBridge` 提供第三方聊天平台（飞书/企微/钉钉/Slack/Teams/Telegram/WhatsApp）集成与凭证的管理面 CRUD。**云端控制台与下游（CrabCode 等）调的是同一组端点、同一份按租户隔离的数据**——任一端创建/修改，另一端即时可见，无需同步机制。平台 webhook adapter（验签/收发消息）是 Phase 8 后端工作，SDK 不承载。
 
 ```ts
-import {
-  isPlatform, isRegion, isChannelInboundEvent, asCredentialRef,
-  type Platform, type ChatCredentialPublic, type ChannelInboundEvent,
-} from '@acosmi/sdk-ts';
+import { Client, chatBridgeScopes } from '@acosmi/sdk-ts';
 
+const client = new Client({ baseURL: process.env.ACOSMI_BASE_URL! });
+// chat_bridge 是高风险 scope, 不在 allScopes() 内, 必须显式申请
+await client.login('CrabCode 平台接入', chatBridgeScopes());
+
+// 1. 创建集成 (chat_bridge:write); 平台原始 ID 服务端只存 SHA256 hash
+const integ = await client.chatBridge.createIntegration({
+  appId: 'crabcode', platform: 'feishu', region: 'cn',
+  workspaceId: 'ou_xxx', botId: 'cli_xxx',
+});
+
+// 2. 存凭证 (明文一次性提交; 响应恒为 masked 视图, 永不回明文/密文)
+const cred = await client.chatBridge.storeCredential(integ.id, {
+  secretKind: 'app_secret', plaintext: process.env.FEISHU_SECRET!,
+});
+
+// 3. 激活
+await client.chatBridge.updateIntegrationStatus(integ.id, 'active');
+
+// 查询 (chat_bridge:read) / 轮换与吊销 (chat_bridge:rotate, 高风险独立 scope)
+await client.chatBridge.listIntegrations('crabcode');
+await client.chatBridge.listCredentials(integ.id);
+await client.chatBridge.rotateCredential(integ.id, 'app_secret', 'new-secret');
+await client.chatBridge.revokeCredential(cred.credentialRef);
+```
+
+类型守卫与 branded ref 仍从根入口导出：
+
+```ts
+import { isPlatform, asCredentialRef, type Platform } from '@acosmi/sdk-ts';
 isPlatform('feishu');             // → true（7 平台枚举运行时守卫）
 asCredentialRef('cred_abc...');   // → branded CredentialRef（防 plaintext 误传）
 ```
 
-边界（契约 §6 + §16）：
+边界（契约 §6 + §12 + §16）：
 
-- 平台 secret（bot token / signing key / AES key）**只入上游 credential vault**；SDK 公共面只见 `CredentialRef`（`cred_<base32>`）+ `fingerprint` + 脱敏 metadata，**永不**出现 ciphertext / plaintext（`ChatCredentialPublic` 编译期即无密文字段）。
-- **wire 平面**：chatbridge 资源视图走 nexus-v4 model-direct 序列化，字段为 **camelCase**（与 remote-control 的 snake_case 平面不同，详见契约 §12）。
-- 平台原始 thread / sender / workspace ID 一律 SHA256 hash 后入库（`threadHash`/`senderHash`）。
+- 平台 secret（bot token / signing key / AES key）**只在 `storeCredential`/`rotateCredential` 请求体出现一次**，服务端加密落库后即弃；SDK 公共面只见 `CredentialRef`（`cred_<base32>`）+ `fingerprint` + 脱敏 metadata，**永不**出现 ciphertext / plaintext（`ChatCredentialPublic` 编译期即无密文字段）。
+- **wire 平面**：请求体为 snake_case（SDK 自动转换），响应资源视图走 nexus-v4 model-direct 序列化为 **camelCase**（与 remote-control 的 snake_case 平面不同，详见契约 §12）。`ChatIntegration.configJson` 服务端从不返回（`json:"-"`），写入走 `createIntegration({ configJson })`。
+- 平台原始 thread / sender / workspace ID 一律 SHA256 hash 后入库（`threadHash`/`senderHash`/`workspaceIdHash`）。
+- scope 三档最小授权：`chat_bridge:read`（查询）/ `chat_bridge:write`（创建集成/存凭证）/ `chat_bridge:rotate`（轮换/吊销，高风险）；分组 scope `chat_bridge` 自包含三子项。跨租户引用服务端一律 404。
 
 ## 认证
 

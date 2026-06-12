@@ -31,6 +31,18 @@ export interface AgentRunArtifactPolicy {
   maxFiles?: number;
 }
 
+/**
+ * Run metadata 约定键 (契约 §18.3 r4, additive)。
+ *
+ * 服务端防滥用上限: ≤32 条 / 键 ≤64B / 值 ≤2KB (`validateAgentRunMetadata`)。
+ *   - `title`     列表显示标题; 缺省由服务端从 input 首行派生 (60 rune 截断)。
+ *   - `workspace` 用户声明的期望项目目录; desktop runner 经
+ *     `revealRemoteToken()` 响应的 `workspace` 字段回传, 由桌面 launcher
+ *     决定是否 chdir 采纳 (路径不存在/越权时回退本机当前目录并提示)。
+ */
+export const AGENT_RUN_META_TITLE = 'title';
+export const AGENT_RUN_META_WORKSPACE = 'workspace';
+
 export interface AgentRunCreateRequest {
   appId: string;
   mode?: string;
@@ -40,6 +52,10 @@ export interface AgentRunCreateRequest {
   model?: string;
   activeSkillIds?: string[];
   knowledgeBaseIds?: string[];
+  /**
+   * 自由 KV 元数据。远控 run 的约定键见 {@link AGENT_RUN_META_TITLE} /
+   * {@link AGENT_RUN_META_WORKSPACE} (契约 §18.3 r4)。
+   */
   metadata?: Record<string, string>;
   localContextPolicy?: AgentRunLocalContextPolicy;
   artifactPolicy?: AgentRunArtifactPolicy;
@@ -54,6 +70,12 @@ export interface AgentRunCreateRequest {
   adapter?: AdapterKind;
   permissionPolicy?: PermissionPolicy;
   workspacePolicy?: WorkspacePolicy;
+  /**
+   * BYO 模型密钥公开引用 (契约 §18.2; 仅远控 runtime + runner='cloud')。
+   * 只传 `crabcodeByok.create()` 返回的 credentialRef; 明文/密文绝不过此请求 —
+   * 解密只发生在网关 launchCloudRunner 的子进程 env 注入点。
+   */
+  byokCredentialRef?: string;
 }
 
 /**
@@ -84,6 +106,31 @@ export interface AgentRun {
   completedAt?: string;
   error?: AgentRunErrorPayload;
   metadata?: Record<string, string>;
+  // 远控元数据 (Phase 5C 控制台列表; 标准 run 为 'standard'/缺省)。
+  // view 永不携带 session token / policy / messages 任何形态 (契约 §6)。
+  runtime?: AgentRunRuntime | string;
+  runner?: RunnerKind | string;
+  adapter?: AdapterKind | string;
+}
+
+/** `agentRuns.list()` 过滤/分页参数 (GET /agent-runs, Phase 5C 控制台)。 */
+export interface AgentRunListOptions {
+  /** 按 runtime 过滤, 例 'crabcode_remote' (远控控制台列表)。 */
+  runtime?: AgentRunRuntime | string;
+  /** 按状态过滤, 例 'running'。 */
+  status?: AgentRunStatus | string;
+  /** 页码, 1 起; 缺省 1。 */
+  page?: number;
+  /** 每页条数; 缺省 20, 服务端上限 100。 */
+  pageSize?: number;
+}
+
+/** `agentRuns.list()` 结果 — 分页形状对齐 listConsumeRecords ({records,total,page,pageSize})。 */
+export interface AgentRunListResult {
+  records: AgentRun[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 export interface AgentRunCreateResponse {
