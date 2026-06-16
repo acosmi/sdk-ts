@@ -333,6 +333,21 @@ export interface LoginOptions {
   orgUUID?: string;
   /** 自定义 token 有效期 (秒) */
   expiresIn?: number;
+  /**
+   * 桌面 loopback 授权成功后, 把浏览器 302 重定向到此品牌成功页 URL,
+   * 替代默认在 `127.0.0.1` 本地回环服务器渲染的"授权成功"HTML。
+   *
+   * 授权码仍先回投本地回环 (`codeResolver(code)` 不变), 安全模型不动 —
+   * 只是把"给浏览器看的那一屏"从本地 HTML 换成 302 到调用方域名页,
+   * 让地址栏显示业务域名而非 `127.0.0.1`。
+   *
+   * 取值约束: 必须是 `http(s)` 绝对 URL; 缺失或非法时回退本地 HTML (零回归)。
+   * 多部署/多域名调用方 (acosmi.com / sign.zhonglvbao.com / FedStart 等) 必须
+   * 传入随自身部署 origin 变化的 URL, **不可硬编码单一域名** —— 否则会把其他
+   * 部署的桌面用户导向错误域名, 且该域名若未服务此页将 404。SDK 默认不重定向,
+   * 由调用方显式 opt-in (确保目标页确实可达)。
+   */
+  successRedirectURL?: string;
 }
 
 /** 检测 SSL/TLS 相关错误 (企业代理 Zscaler 等) */
@@ -422,16 +437,27 @@ export async function authorize(
       codeRejecter(new Error(`authorization denied: ${errMsg}`));
       return;
     }
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>授权成功</title></head>` +
-        `<body style="font-family:system-ui,sans-serif;text-align:center;padding:60px 20px">` +
-        `<h2>授权成功</h2>` +
-        `<p>已完成身份认证, 请返回应用继续使用。</p>` +
-        `<p style="color:#888;font-size:14px">此窗口将在 3 秒后自动关闭…</p>` +
-        `<script>setTimeout(function(){window.close()},3000)</script>` +
-        `</body></html>`,
-    );
+    // 成功页: 若调用方显式提供了品牌成功页 URL → 302 把浏览器导向业务域名
+    // (地址栏显示自家域名而非 127.0.0.1); 否则保留本地成功 HTML (零回归)。
+    // 无论哪条分支, 授权码都已在本地捕获 — codeResolver(code) 必须照常调用,
+    // token 交换逻辑与安全模型完全不变。
+    const successRedirect = resolveSuccessRedirect(opts.successRedirectURL);
+    if (successRedirect) {
+      res.statusCode = 302;
+      res.setHeader('Location', successRedirect);
+      res.end();
+    } else {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(
+        `<!DOCTYPE html><html><head><meta charset="utf-8"><title>授权成功</title></head>` +
+          `<body style="font-family:system-ui,sans-serif;text-align:center;padding:60px 20px">` +
+          `<h2>授权成功</h2>` +
+          `<p>已完成身份认证, 请返回应用继续使用。</p>` +
+          `<p style="color:#888;font-size:14px">此窗口将在 3 秒后自动关闭…</p>` +
+          `<script>setTimeout(function(){window.close()},3000)</script>` +
+          `</body></html>`,
+      );
+    }
     codeResolver(code);
   });
 
@@ -504,6 +530,24 @@ function htmlEscape(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * 校验调用方提供的桌面授权成功页重定向 URL。
+ *
+ * 仅接受 `http(s)` 绝对 URL —— 拒绝 `javascript:` / `data:` 等其他协议, 防止
+ * 把本地回环成功页变成开放重定向到任意协议的跳板 (纵深防御; 即便取值来自
+ * 调用方静态配置)。缺失或非法时返回 `null`, 调用方据此回退本地成功 HTML。
+ */
+function resolveSuccessRedirect(raw?: string): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
 }
 
 // =============================================================================
