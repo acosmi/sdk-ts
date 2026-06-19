@@ -990,8 +990,11 @@ export class Client {
    * V30 二轮审计 D-P1-2: 此方法不返回 entitlement-filter-status header.
    * UI 想根据 fallback 状态显示降级提示, 请改调 listModelsWithStatus.
    */
-  async listModels(signal?: AbortSignal): Promise<ManagedModel[]> {
-    const r = await this.listModelsWithStatus(signal);
+  async listModels(
+    signal?: AbortSignal,
+    opts?: { includeLocked?: boolean },
+  ): Promise<ManagedModel[]> {
+    const r = await this.listModelsWithStatus(signal, opts);
     return r.models;
   }
 
@@ -1007,17 +1010,32 @@ export class Client {
    */
   async listModelsWithStatus(
     signal?: AbortSignal,
+    opts?: { includeLocked?: boolean },
   ): Promise<{ models: ManagedModel[]; status: FilterStatus }> {
+    // includeLocked=true：请求「全集模式」。网关已实现 ?picker=1
+    // （managed_model.go appendLockedUpsellModels）：filterModelsByEntitlement 删行后把
+    // 越档模型作为 Locked=true 补回，返回全集供 C 端选择器展示「付费订阅区」+ 置灰升级
+    // 引导。opts.includeLocked 是面向调用方的语义名，拼成网关认的 picker=1。缺省=现状
+    // （只返有桶模型），向后兼容旧客户端 / 内部消费者。
+    const includeLocked = opts?.includeLocked === true;
+    const path = includeLocked
+      ? '/managed-models?picker=1'
+      : '/managed-models';
     const { result, headers } = await this.doJSONFull<APIResponse<ManagedModel[]>>(
       'GET',
-      '/managed-models',
+      path,
       null,
       signal,
     );
     // v1.2: 写缓存前归一化 input_modalities → inputModalities (snake/camel 双名兼容)
     const normalized = normalizeInputModalities(result.data);
-    this.modelCache = normalized;
-    this.modelCacheTimeMs = Date.now();
+    // 全集模式（含 locked 行）只供 picker 展示，**不写** this.modelCache —— 后者是
+    // 「可用模型」缓存（getModelCapabilities / quota 消费），写全集会让 locked 模型混入
+    // 可用集（全集/子集互污）。缺省模式照旧缓存，行为完全不变。
+    if (!includeLocked) {
+      this.modelCache = normalized;
+      this.modelCacheTimeMs = Date.now();
+    }
 
     let status: FilterStatus = '';
     if (headers) {
