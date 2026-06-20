@@ -24,6 +24,10 @@ import {
   type ImageGenerationResponse,
   type VideoGenerationRequest,
   type VideoTaskResponse,
+  type EmbeddingRequest,
+  type EmbeddingResponse,
+  type RerankRequest,
+  type RerankResponse,
   parseSettlement,
   parseSourcesEvent,
 } from '../models/types';
@@ -1272,6 +1276,44 @@ export class Client {
     }
     const { result } = await this.doJSONFullRaw('GET', endpoint, null, signal);
     return this.unwrapAPIResponse<VideoTaskResponse>(result);
+  }
+
+  /**
+   * 向量 (同步)。POST /managed-models/:id/embeddings
+   *
+   * 仅 capabilities.supports_embedding=true 的托管模型可用 (上游接 DashScope)。
+   * 响应为 OpenAI /v1/embeddings 标准格式 (网关直通, 无 response.Success 包装)。
+   *
+   * @param modelID 向量托管模型 ID
+   */
+  async embeddings(
+    modelID: string,
+    req: EmbeddingRequest,
+    signal?: AbortSignal,
+  ): Promise<EmbeddingResponse> {
+    const endpoint = `/managed-models/${encodeURIComponent(modelID)}/embeddings`;
+    const { result } = await this.doJSONFullRaw('POST', endpoint, req, signal, CHAT_REQUEST_TIMEOUT_MS);
+    return JSON.parse(new TextDecoder().decode(result)) as EmbeddingResponse;
+  }
+
+  /**
+   * 重排序 (同步)。POST /managed-models/:id/rerank
+   *
+   * 仅 capabilities.supports_rerank=true 的托管模型可用 (上游接 DashScope)。
+   * 统一扁平契约: { query, documents[], top_n?, return_documents?, instruct? };
+   * 响应 { results: [{ index, relevance_score, document? }], usage, model }
+   * (网关已把上游原生/OpenAI 兼容两线路归一化, 无 response.Success 包装)。
+   *
+   * @param modelID 重排序托管模型 ID
+   */
+  async rerank(
+    modelID: string,
+    req: RerankRequest,
+    signal?: AbortSignal,
+  ): Promise<RerankResponse> {
+    const endpoint = `/managed-models/${encodeURIComponent(modelID)}/rerank`;
+    const { result } = await this.doJSONFullRaw('POST', endpoint, req, signal, CHAT_REQUEST_TIMEOUT_MS);
+    return JSON.parse(new TextDecoder().decode(result)) as RerankResponse;
   }
 
   /**

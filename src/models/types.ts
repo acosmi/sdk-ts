@@ -79,6 +79,18 @@ export interface ModelCapabilities {
    * 应通过 client.generateVideo() + pollVideoTask() 调用。计量维度派生为 VIDEO (按时长计费)。
    */
   supports_video_generation?: boolean;
+
+  /**
+   * 向量能力 (v2.9+): 为 true 表示该托管模型是向量模型 (DashScope text-embedding-v4 等),
+   * 应通过 client.embeddings() 调用。
+   */
+  supports_embedding?: boolean;
+
+  /**
+   * 重排序能力 (v2.9+): 为 true 表示该托管模型是重排序模型 (DashScope gte-rerank-v2 / qwen3-rerank 等),
+   * 应通过 client.rerank() 调用。
+   */
+  supports_rerank?: boolean;
 }
 
 /** 图片生成请求 (client.generateImage) */
@@ -115,6 +127,67 @@ export interface VideoTaskResponse {
   videoUrl?: string;
   error?: string;
   requestId?: string;
+}
+
+// ── 向量 (Embedding) / 重排序 (Rerank) (v2.9.0) ──────────────────────────────
+// SDK 订阅会员经 POST /managed-models/:id/{embeddings,rerank} 调用; 仅
+// capabilities.supports_embedding / supports_rerank 的托管模型可用。上游接 DashScope。
+
+/** 向量请求 (client.embeddings)。对外 = OpenAI /v1/embeddings 标准。 */
+export interface EmbeddingRequest {
+  /** 待向量化的文本 (单条) 或文本数组 (批量) */
+  input: string | string[];
+  /** 向量维度 (可选; DashScope text-embedding-v4 支持 2048/1536/1024/768/512/256/128/64) */
+  dimensions?: number;
+  /** 编码格式 (可选, 如 "float") */
+  encoding_format?: string;
+}
+
+/** 单条向量结果 (OpenAI 标准)。 */
+export interface EmbeddingData {
+  object: string;
+  index: number;
+  embedding: number[];
+}
+
+/** 向量响应 (OpenAI /v1/embeddings 标准)。 */
+export interface EmbeddingResponse {
+  object: string;
+  model: string;
+  data: EmbeddingData[];
+  usage: { prompt_tokens?: number; total_tokens: number };
+  id?: string;
+}
+
+/** 重排序请求 (client.rerank)。统一扁平契约, 网关内部按模型线路转换。 */
+export interface RerankRequest {
+  /** 查询文本 */
+  query: string;
+  /** 候选文档列表 */
+  documents: string[];
+  /** 返回前 N 条 (可选; 缺省返回全部) */
+  top_n?: number;
+  /** 是否在结果中回传文档原文 (可选, 缺省 false) */
+  return_documents?: boolean;
+  /** 排序指令 (可选; 仅 OpenAI 兼容线路支持, 原生线路忽略) */
+  instruct?: string;
+}
+
+/** 单条重排序结果。 */
+export interface RerankResult {
+  /** 文档在原 documents 数组中的下标 */
+  index: number;
+  /** 相关性得分 (越高越相关) */
+  relevance_score: number;
+  /** 文档原文 (仅 return_documents=true 时存在) */
+  document?: string;
+}
+
+/** 重排序响应。 */
+export interface RerankResponse {
+  results: RerankResult[];
+  usage: { total_tokens: number };
+  model?: string;
 }
 
 /**

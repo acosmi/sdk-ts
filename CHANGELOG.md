@@ -5,6 +5,16 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-06-20 — 向量 (Embedding) + 重排序 (Rerank) 端点
+
+托管模型网关新增向量与重排序两类模型（上游接阿里云百炼 DashScope），SDK 订阅会员可经现有会员计费体系（Hold→Settle→Release，按 `total_tokens` 套 input 费率）直接调用。具体上游模型名（`text-embedding-v4` / `gte-rerank-v2` / `qwen3-rerank` 等）由管理员在托管模型后台自填，不在 SDK / 网关硬编码。
+
+### Added
+
+- **`client.embeddings(modelID, req)`** — 向量（同步，`POST /managed-models/:id/embeddings`）：请求 `{ input: string | string[], dimensions?, encoding_format? }`，响应为 OpenAI `/v1/embeddings` 标准格式（`{ object, model, data: [{ embedding }], usage }`，网关直通无包装）。仅 `capabilities.supports_embedding=true` 的模型可用。
+- **`client.rerank(modelID, req)`** — 重排序（同步，`POST /managed-models/:id/rerank`）：统一扁平契约 `{ query, documents[], top_n?, return_documents?, instruct? }`，响应 `{ results: [{ index, relevance_score, document? }], usage, model }`（网关已把上游原生嵌套 / OpenAI 兼容扁平两线路归一化）。仅 `capabilities.supports_rerank=true` 的模型可用。
+- **类型** — `EmbeddingRequest`/`EmbeddingData`/`EmbeddingResponse`/`RerankRequest`/`RerankResult`/`RerankResponse`。
+
 ## [2.7.0] - 2026-06-11 — 远控管理面补齐 + BYOK 密钥客户端 + Chat Bridge CRUD（Phase 7B）
 
 补齐远控核心交互之外的全部管理面（此前下游 CrabCode 只能裸 fetch），新增 BYO 模型密钥客户端，落地 chat-bridge integration/credential 管理面 CRUD——云端控制台与下游调用的是同一组端点同一份租户隔离数据，天然互通。全部方法逐字段对齐 nexus-v4 handler 真实 wire 形状（契约 §12/§14/§18 附录 A）。
