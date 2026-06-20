@@ -15,7 +15,7 @@
 /**
  * Compliance envelope 稳定业务状态。
  *
- * 字面量与 Java {@code EnvelopeStatusEnum} 的 `name()` 一致（这是 enum，是 wire 上的实际
+ * 字面量与 Java `EnvelopeStatusEnum` 的 `name()` 一致（这是 enum，是 wire 上的实际
  * 字符串）；前端按这些字符串分支展示文案。
  */
 export type ComplianceEnvelopeStatus =

@@ -425,10 +425,17 @@ export class Client {
   /** 互斥锁 (TS 用 Promise chain 替代 sync.Mutex) */
   private mu: Promise<void> = Promise.resolve();
 
-  /** WebSocket 状态 (实际方法由 ws.ts mixin 维护) */
+  /**
+   * WebSocket 状态 (实际方法由 ws.ts mixin 维护)。
+   * @internal — 实现细节: 跨模块 (ws.ts mixin) 需可见故为 public, 但非消费者 API,
+   * 消费者用 connect/subscribe 等高层方法; 引用的 WSState 不进公开文档。
+   */
   ws: WSState | null = null;
 
-  /** v0.15.1: token 就绪等待机制 — login 成功后 resolve, 等待方解除阻塞 */
+  /**
+   * v0.15.1: token 就绪等待机制 — login 成功后 resolve, 等待方解除阻塞。
+   * @internal — 内部同步原语 (Deferred), 非消费者 API。
+   */
   tokenReady: Deferred<void> = newDeferred<void>();
   /** Login 进行中 — 等待方需等而非 fail-fast */
   loginInFlight = false;

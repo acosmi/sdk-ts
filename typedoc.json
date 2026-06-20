@@ -6,5 +6,6 @@
   "out": "docs/api",
   "plugin": ["typedoc-plugin-markdown"],
   "readme": "none",
+  "excludeInternal": true,
   "exclude": ["**/*.test.ts", "src/core/http.ts"]
 }
