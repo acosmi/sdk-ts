@@ -175,6 +175,46 @@ console.log(res.videoUrl); // VideoTaskResponse: taskId / status / videoUrl / er
 
 > 字段是网关**通用契约**；某厂商支持哪些取值由上游模型决定（如万相尺寸 `宽*高` 星号格式由网关代转）。网关适配范围：OpenAI 兼容图片 + 火山引擎（即梦/豆包）视频 + DashScope 通义万相（wanx）原生异步任务（图片+视频）。
 
+## 向量 / 重排序（托管模型网关，v2.9+）
+
+向量（embedding）与重排序（rerank）走与 chat 同一套**会员计费**（Hold→Settle→Release，按 `total_tokens` 套 input 费率），上游接阿里云百炼 DashScope。仅 `capabilities.supports_embedding` / `supports_rerank` 的托管模型可用；具体上游模型名由管理员在后台自填。
+
+### 向量（同步）
+
+`embeddings` 一次调用拿向量，响应即 OpenAI `/v1/embeddings` 标准格式。
+
+```ts
+const models = await client.listModels();
+const embModel = models.find((m) => m.capabilities?.supports_embedding);
+
+const resp = await client.embeddings(embModel!.id, {
+  input: ['第一段文本', '第二段文本'], // string 或 string[]
+  dimensions: 1024,                   // 可选
+});
+console.log(resp.data[0].embedding);  // number[]
+console.log(resp.usage.total_tokens);
+```
+
+### 重排序（同步）
+
+`rerank` 传入 query + 候选文档，返回按相关性排序的下标与得分。
+
+```ts
+const rerankModel = models.find((m) => m.capabilities?.supports_rerank);
+
+const resp = await client.rerank(rerankModel!.id, {
+  query: '什么是文本排序模型',
+  documents: ['文档A', '文档B', '文档C'],
+  top_n: 3,              // 可选
+  return_documents: true, // 可选：结果内回传文档原文
+});
+for (const r of resp.results) {
+  console.log(r.index, r.relevance_score, r.document);
+}
+```
+
+> 重排序对外是**统一扁平契约**；网关内部按模型绑定的线路（DashScope 原生嵌套 `gte-rerank-v2` / OpenAI 兼容扁平 `qwen3-rerank`）自动转换并归一化响应，SDK 侧无需关心。
+
 ## 双格式红线（设计核心）
 
 SDK 同时提供 **Anthropic + OpenAI 两条 endpoint**，**等地位**，对应两个不同下游产品。
@@ -508,6 +548,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Client 构造** | `new Client(cfg)`（同步），`Client.create(cfg)`（async；预加载已有 TokenStore）            |
 | **Chat**     | `chat`, `chatStream`, `chatStreamWithUsage`, `chatMessages`, `chatMessagesStream`, `buildChatRequest` |
 | **图片 / 视频生成**（v2.2.0+） | `generateImage`（同步）, `generateVideo`（建异步任务）, `pollVideoTask`（轮询）；仅 `capabilities.supports_image_generation` / `supports_video_generation` 模型可用 |
+| **向量 / 重排序**（v2.9.0+） | `embeddings`（同步）, `rerank`（同步）；仅 `capabilities.supports_embedding` / `supports_rerank` 模型可用 |
 | **Agent Runs** | `agentRuns.create`, `agentRuns.stream`, `agentRuns.run`, `agentRuns.cancel`, `agentRuns.get`, `agentRuns.listArtifacts`, `agentRuns.downloadArtifact`, `agentRuns.submitLocalToolResult`, `agentRuns.runWithLocalTools` |
 | **Agent Runs — 远程控制**（v2.1） | `agentRuns.createRemoteRun`, `agentRuns.streamRemoteControl`；helper：`parseRemoteControlEvent`, `isTerminalRemoteEvent`；scope：`remoteControlScopes()` / `ScopeRemoteControl`（不进 `allScopes()`） |
 | **Chat Bridge**（v2.1 · types-only） | 无 client 方法（Phase 7B 后端落地）；导出类型守卫 `isPlatform`, `isRegion`, `isIntegrationStatus`, `isChannelInboundEvent`, `asCredentialRef` |
