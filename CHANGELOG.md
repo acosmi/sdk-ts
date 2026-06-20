@@ -5,6 +5,20 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-06-20 — 多模态向量 / 重排序 (qwen3-vl-embedding / qwen3-vl-rerank)
+
+向量与重排序端点扩展为**多模态**（text / image / **video**），对接 DashScope `qwen3-vl-embedding`（多模态向量端点）与 `qwen3-vl-rerank`（原生 rerank 端点 + 多模态 content）。面向自建搜索引擎的图文 / 视频检索场景。计费口径不变（`total_tokens` 套 input 费率），上游模型名仍由管理员后台自填，不在 SDK / 网关硬编码。
+
+### Added
+
+- **`EmbeddingRequest.contents`** — 多模态向量输入：`MultimodalContent[]`（`{ text?, image?, video? }`）。与 `input`（文本线路）二选一；多模态托管模型用 `contents`。同时新增可选 `output_type` / `fps` / `enable_fusion` 参数。
+- **`RerankRequest` 多态 query / documents** — `query: RerankQuery`（`string | { text?, image? }`），`documents: RerankDocument[]`（`(string | { text?, image?, video? })[]`）；新增可选 `fps`（多模态视频文档抽帧率）。文本调用完全向后兼容（仍可传 `string` / `string[]`）。
+- **类型** — `MultimodalContent` / `RerankQuery` / `RerankDocument`。
+
+### Changed
+
+- **`EmbeddingRequest.input` 改为可选**（`input?: string | string[]`）——多模态线路改用 `contents`。文本调用方无需改动（仍可只传 `input`）。
+
 ## [2.9.0] - 2026-06-20 — 向量 (Embedding) + 重排序 (Rerank) 端点 + listModels 全集模式
 
 托管模型网关新增向量与重排序两类模型（上游接阿里云百炼 DashScope），SDK 订阅会员可经现有会员计费体系（Hold→Settle→Release，按 `total_tokens` 套 input 费率）直接调用。具体上游模型名（`text-embedding-v4` / `gte-rerank-v2` / `qwen3-rerank` 等）由管理员在托管模型后台自填，不在 SDK / 网关硬编码。

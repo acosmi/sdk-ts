@@ -88,3 +88,76 @@ describe('client.rerank', () => {
     expect(resp.usage.total_tokens).toBe(79);
   });
 });
+
+// ── 多模态 (v2.10.0): qwen3-vl-embedding / qwen3-vl-rerank ──────────────────
+
+describe('client.embeddings 多模态', () => {
+  it('携带 contents (text/image/video) + 多模态参数, 原样透传', async () => {
+    let capturedBody: any = null;
+    const client = clientWithFetch(async (_url: any, init: any) => {
+      capturedBody = init?.body ? JSON.parse(init.body) : null;
+      return new Response(
+        JSON.stringify({
+          object: 'list',
+          model: 'qwen3-vl-embedding',
+          data: [{ object: 'embedding', index: 0, embedding: [0.5, 0.6], type: 'dense' }],
+          usage: { total_tokens: 12 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const resp = await client.embeddings('qwen3-vl-embedding', {
+      contents: [{ text: '一只猫' }, { image: 'https://x/cat.png' }, { video: 'https://x/clip.mp4' }],
+      output_type: 'dense',
+      fps: 2,
+      enable_fusion: true,
+    });
+
+    expect(capturedBody.input).toBeUndefined();
+    expect(capturedBody.contents).toEqual([
+      { text: '一只猫' },
+      { image: 'https://x/cat.png' },
+      { video: 'https://x/clip.mp4' },
+    ]);
+    expect(capturedBody.output_type).toBe('dense');
+    expect(capturedBody.fps).toBe(2);
+    expect(capturedBody.enable_fusion).toBe(true);
+    expect(resp.data[0].embedding).toEqual([0.5, 0.6]);
+    expect(resp.usage.total_tokens).toBe(12);
+  });
+});
+
+describe('client.rerank 多模态', () => {
+  it('query/documents 支持多模态对象, 原样透传', async () => {
+    let capturedBody: any = null;
+    const client = clientWithFetch(async (_url: any, init: any) => {
+      capturedBody = init?.body ? JSON.parse(init.body) : null;
+      return new Response(
+        JSON.stringify({
+          results: [{ index: 0, relevance_score: 0.88 }],
+          usage: { total_tokens: 33 },
+          model: 'qwen3-vl-rerank',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const resp = await client.rerank('qwen3-vl-rerank', {
+      query: { text: '红色跑车' },
+      documents: [{ image: 'https://x/car.png' }, { video: 'https://x/road.mp4' }, '一段文字'],
+      fps: 1.5,
+      top_n: 1,
+    });
+
+    expect(capturedBody.query).toEqual({ text: '红色跑车' });
+    expect(capturedBody.documents).toEqual([
+      { image: 'https://x/car.png' },
+      { video: 'https://x/road.mp4' },
+      '一段文字',
+    ]);
+    expect(capturedBody.fps).toBe(1.5);
+    expect(resp.results[0].relevance_score).toBeCloseTo(0.88);
+    expect(resp.model).toBe('qwen3-vl-rerank');
+  });
+});

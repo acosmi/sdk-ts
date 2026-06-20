@@ -133,14 +133,38 @@ export interface VideoTaskResponse {
 // SDK 订阅会员经 POST /managed-models/:id/{embeddings,rerank} 调用; 仅
 // capabilities.supports_embedding / supports_rerank 的托管模型可用。上游接 DashScope。
 
-/** 向量请求 (client.embeddings)。对外 = OpenAI /v1/embeddings 标准。 */
+/**
+ * 多模态内容片段 (v2.10+; 向量/重排序 qwen3-vl-embedding / qwen3-vl-rerank 线路)。
+ * text / image / video 至少填一项; image/video 取 URL 或 base64 data URI。
+ */
+export interface MultimodalContent {
+  /** 文本片段 */
+  text?: string;
+  /** 图片 (URL 或 base64 data URI) */
+  image?: string;
+  /** 视频 (URL); 仅多模态线路支持 */
+  video?: string;
+}
+
+/** 向量请求 (client.embeddings)。文本线路 = OpenAI /v1/embeddings 标准; 多模态线路用 contents。 */
 export interface EmbeddingRequest {
-  /** 待向量化的文本 (单条) 或文本数组 (批量) */
-  input: string | string[];
+  /** 文本输入 (文本向量线路): 单条文本或文本数组 (批量)。多模态线路改用 contents。 */
+  input?: string | string[];
+  /**
+   * 多模态内容 (v2.10+; qwen3-vl-embedding 线路): text/image/video 片段数组。
+   * 与 input 二选一; 多模态托管模型须用 contents。
+   */
+  contents?: MultimodalContent[];
   /** 向量维度 (可选; DashScope text-embedding-v4 支持 2048/1536/1024/768/512/256/128/64) */
   dimensions?: number;
   /** 编码格式 (可选, 如 "float") */
   encoding_format?: string;
+  /** 输出向量类型 (可选; 多模态线路, 如 "dense") */
+  output_type?: string;
+  /** 视频抽帧率 fps (可选; 多模态视频输入) */
+  fps?: number;
+  /** 是否启用多模态特征融合 (可选; 多模态线路) */
+  enable_fusion?: boolean;
 }
 
 /** 单条向量结果 (OpenAI 标准)。 */
@@ -159,18 +183,25 @@ export interface EmbeddingResponse {
   id?: string;
 }
 
+/** 重排序查询 (v2.10+): 文本字符串, 或多模态 {text|image}。 */
+export type RerankQuery = string | { text?: string; image?: string };
+/** 重排序候选文档 (v2.10+): 文本字符串, 或多模态 {text|image|video}。 */
+export type RerankDocument = string | MultimodalContent;
+
 /** 重排序请求 (client.rerank)。统一扁平契约, 网关内部按模型线路转换。 */
 export interface RerankRequest {
-  /** 查询文本 */
-  query: string;
-  /** 候选文档列表 */
-  documents: string[];
+  /** 查询: 文本字符串 (文本线路), 或多模态 {text|image} (qwen3-vl-rerank 线路) */
+  query: RerankQuery;
+  /** 候选文档: 文本字符串数组, 或多模态 {text|image|video} 对象数组 */
+  documents: RerankDocument[];
   /** 返回前 N 条 (可选; 缺省返回全部) */
   top_n?: number;
   /** 是否在结果中回传文档原文 (可选, 缺省 false) */
   return_documents?: boolean;
   /** 排序指令 (可选; 仅 OpenAI 兼容线路支持, 原生线路忽略) */
   instruct?: string;
+  /** 视频抽帧率 fps (可选; 多模态视频文档) */
+  fps?: number;
 }
 
 /** 单条重排序结果。 */
