@@ -215,6 +215,28 @@ for (const r of resp.results) {
 
 > 重排序对外是**统一扁平契约**；网关内部按模型绑定的线路（DashScope 原生嵌套 `gte-rerank-v2` / OpenAI 兼容扁平 `qwen3-rerank`）自动转换并归一化响应，SDK 侧无需关心。
 
+### 多模态向量 / 重排序（v2.10+，text / image / video）
+
+对接 DashScope `qwen3-vl-embedding`（多模态向量）与 `qwen3-vl-rerank`（多模态重排序）。向量用 `contents` 取代 `input`；重排序的 `query` / `documents` 接受多模态对象（`{ text? , image?, video? }`）。适用于自建搜索引擎的图文 / 视频检索。
+
+```ts
+// 多模态向量：图 / 视频 / 文本混合
+const emb = await client.embeddings(mmEmbModel!.id, {
+  contents: [{ text: '一只橘猫' }, { image: 'https://…/cat.png' }, { video: 'https://…/clip.mp4' }],
+  output_type: 'dense', // 可选
+  fps: 2,               // 可选：视频抽帧率
+});
+
+// 多模态重排序：query 与候选可为多模态对象，也可混入纯文本字符串
+const rr = await client.rerank(mmRerankModel!.id, {
+  query: { text: '红色跑车' },
+  documents: [{ image: 'https://…/car.png' }, { video: 'https://…/road.mp4' }, '一段描述文字'],
+  fps: 1.5, // 可选
+});
+```
+
+> 文本调用完全向后兼容：`input` / 字符串 `query` / 字符串 `documents` 行为不变。多模态托管模型须由管理员在后台勾选对应能力位与输入模态（text/image/video）。
+
 ## 双格式红线（设计核心）
 
 SDK 同时提供 **Anthropic + OpenAI 两条 endpoint**，**等地位**，对应两个不同下游产品。

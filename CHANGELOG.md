@@ -5,7 +5,21 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.9.0] - 2026-06-20 — 向量 (Embedding) + 重排序 (Rerank) 端点
+## [2.10.0] - 2026-06-20 — 多模态向量 / 重排序 (qwen3-vl-embedding / qwen3-vl-rerank)
+
+向量与重排序端点扩展为**多模态**（text / image / **video**），对接 DashScope `qwen3-vl-embedding`（多模态向量端点）与 `qwen3-vl-rerank`（原生 rerank 端点 + 多模态 content）。面向自建搜索引擎的图文 / 视频检索场景。计费口径不变（`total_tokens` 套 input 费率），上游模型名仍由管理员后台自填，不在 SDK / 网关硬编码。
+
+### Added
+
+- **`EmbeddingRequest.contents`** — 多模态向量输入：`MultimodalContent[]`（`{ text?, image?, video? }`）。与 `input`（文本线路）二选一；多模态托管模型用 `contents`。同时新增可选 `output_type` / `fps` / `enable_fusion` 参数。
+- **`RerankRequest` 多态 query / documents** — `query: RerankQuery`（`string | { text?, image? }`），`documents: RerankDocument[]`（`(string | { text?, image?, video? })[]`）；新增可选 `fps`（多模态视频文档抽帧率）。文本调用完全向后兼容（仍可传 `string` / `string[]`）。
+- **类型** — `MultimodalContent` / `RerankQuery` / `RerankDocument`。
+
+### Changed
+
+- **`EmbeddingRequest.input` 改为可选**（`input?: string | string[]`）——多模态线路改用 `contents`。文本调用方无需改动（仍可只传 `input`）。
+
+## [2.9.0] - 2026-06-20 — 向量 (Embedding) + 重排序 (Rerank) 端点 + listModels 全集模式
 
 托管模型网关新增向量与重排序两类模型（上游接阿里云百炼 DashScope），SDK 订阅会员可经现有会员计费体系（Hold→Settle→Release，按 `total_tokens` 套 input 费率）直接调用。具体上游模型名（`text-embedding-v4` / `gte-rerank-v2` / `qwen3-rerank` 等）由管理员在托管模型后台自填，不在 SDK / 网关硬编码。
 
@@ -14,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`client.embeddings(modelID, req)`** — 向量（同步，`POST /managed-models/:id/embeddings`）：请求 `{ input: string | string[], dimensions?, encoding_format? }`，响应为 OpenAI `/v1/embeddings` 标准格式（`{ object, model, data: [{ embedding }], usage }`，网关直通无包装）。仅 `capabilities.supports_embedding=true` 的模型可用。
 - **`client.rerank(modelID, req)`** — 重排序（同步，`POST /managed-models/:id/rerank`）：统一扁平契约 `{ query, documents[], top_n?, return_documents?, instruct? }`，响应 `{ results: [{ index, relevance_score, document? }], usage, model }`（网关已把上游原生嵌套 / OpenAI 兼容扁平两线路归一化）。仅 `capabilities.supports_rerank=true` 的模型可用。
 - **类型** — `EmbeddingRequest`/`EmbeddingData`/`EmbeddingResponse`/`RerankRequest`/`RerankResult`/`RerankResponse`。
+- **`listModels` / `listModelsWithStatus` 新增 `opts.includeLocked`** — `true` 时请求 `/managed-models?picker=1` 全集模式：网关把越档模型作为 `Locked=true` 补回返全集，供 C 端选择器展示「付费订阅区」+ 置灰升级引导。缺省行为不变（只返有桶模型，向后兼容）。全集模式不写 `modelCache`，避免 locked 模型混入可用模型集。
 
 ## [2.7.0] - 2026-06-11 — 远控管理面补齐 + BYOK 密钥客户端 + Chat Bridge CRUD（Phase 7B）
 
