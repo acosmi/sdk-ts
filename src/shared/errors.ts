@@ -82,8 +82,25 @@ export class HTTPError extends Error {
   retryAfter: number;
   /** 原始响应体 (截断到 maxErrorBodySize) */
   body: string;
+  /** 后端业务机器码 (响应体顶层 errorCode, e.g. "WINDOW_LIMIT_EXCEEDED"); 缺失为 undefined */
+  errorCode?: string;
+  /** 窗口限额场景: 触发的滚动窗口档位 (FIVE_HOUR = 5 小时 / WEEKLY = 7 天); 缺失为 undefined */
+  windowKind?: 'FIVE_HOUR' | 'WEEKLY';
+  /** 窗口限额场景: 预计恢复时间 (ISO-8601 UTC); 缺失为 undefined */
+  windowResetAt?: string;
 
-  constructor(statusCode: number, opts: { type?: string; message?: string; retryAfter?: number; body?: string } = {}) {
+  constructor(
+    statusCode: number,
+    opts: {
+      type?: string;
+      message?: string;
+      retryAfter?: number;
+      body?: string;
+      errorCode?: string;
+      windowKind?: 'FIVE_HOUR' | 'WEEKLY';
+      windowResetAt?: string;
+    } = {},
+  ) {
     let msg: string;
     if (opts.type) {
       msg = `HTTP ${statusCode}: [${opts.type}] ${opts.message ?? ''}`;
@@ -100,6 +117,9 @@ export class HTTPError extends Error {
     this.type = opts.type ?? '';
     this.retryAfter = opts.retryAfter ?? 0;
     this.body = opts.body ?? '';
+    this.errorCode = opts.errorCode;
+    this.windowKind = opts.windowKind;
+    this.windowResetAt = opts.windowResetAt;
   }
 }
 
@@ -173,4 +193,50 @@ export class StreamError extends Error {
     this.rawError = rawError;
     this.retryable = retryable;
   }
+}
+
+// =============================================================================
+// 窗口限额 (WINDOW_LIMIT_EXCEEDED) 识别
+// =============================================================================
+
+/** HTTP 路径窗口限额机器码 — 响应体顶层 errorCode / message 文案子串 (后端契约冻结值)。 */
+const windowLimitErrorCode = 'WINDOW_LIMIT_EXCEEDED';
+/** 流式路径窗口限额 code — agent-run SSE error 事件用小写蛇形 (与 HTTP errorCode 大小写不同)。 */
+const windowLimitStreamCode = 'window_limit_exceeded';
+
+/**
+ * 判断错误是否为窗口限额拒绝 (5 小时 / 7 天滚动窗口 credit 用量达上限)。
+ * 结构化 errorCode 优先, message/body 子串防御兜底 (后端部署版本错位期:
+ * 旧网关只在 message 文案里带 "(WINDOW_LIMIT_EXCEEDED)" 而无顶层 errorCode)。
+ *
+ * 仅识别 HTTP 非 2xx 路径抛出的 HTTPError (/chat OpenAI 网关形态与 /anthropic
+ * Anthropic 形态皆可)。流式场景 (agent-run SSE error 事件 / managed-model
+ * failed 事件) 的 code 是小写 "window_limit_exceeded" 且产物不是 HTTPError,
+ * 用伴生函数 isWindowLimitStreamError 判断。
+ */
+export function isWindowLimitError(err: unknown): err is HTTPError {
+  if (!(err instanceof HTTPError)) return false;
+  if (err.errorCode === windowLimitErrorCode) return true;
+  // 防御兜底: 旧版后端无顶层 errorCode, 机器码只存活在 message 文案 / body 原串。
+  return err.message.includes(windowLimitErrorCode) || err.body.includes(windowLimitErrorCode);
+}
+
+/**
+ * isWindowLimitError 的流式伴生判断 — 面向 SSE error 事件产物
+ * (StreamError / AgentRunStreamError / 裸 AgentRunErrorPayload) 的结构化鸭子判断。
+ *
+ * 入参形态跨三种且互无公共基类, 故返回 boolean 而非 type guard:
+ * `code === "window_limit_exceeded"` 优先; message / userMessage / rawError
+ * 含 "WINDOW_LIMIT_EXCEEDED" 子串防御兜底 (Anthropic 形态流错误事件只有
+ * rate_limit_error type + 文案内机器码的部署错位期)。
+ */
+export function isWindowLimitStreamError(err: unknown): boolean {
+  if (err == null || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; message?: unknown; userMessage?: unknown; rawError?: unknown };
+  if (e.code === windowLimitStreamCode) return true;
+  // 防御兜底 (后端部署版本错位期): 机器码只出现在文案 / 原始错误串。
+  for (const field of [e.message, e.userMessage, e.rawError]) {
+    if (typeof field === 'string' && field.includes(windowLimitErrorCode)) return true;
+  }
+  return false;
 }

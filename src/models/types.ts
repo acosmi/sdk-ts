@@ -350,6 +350,18 @@ export function bucketRowIsCommercial(r: BucketRow | null | undefined): boolean 
   return r.bucketClass.toLowerCase() === BucketClassCommercial.toLowerCase();
 }
 
+/** 滚动窗口限额状态 — QuotaSummary.windowLimits 元素 */
+export interface WindowLimitStatus {
+  /** 窗口档位: FIVE_HOUR = 5 小时滚动窗口, WEEKLY = 7 天滚动窗口 */
+  kind: 'FIVE_HOUR' | 'WEEKLY';
+  /** 窗口内 credit 用量上限 */
+  limitCredits: number;
+  /** 窗口内已用 credit */
+  usedCredits: number;
+  /** 预计恢复时间 (ISO-8601 UTC); 窗口内无用量时为 null / 缺失 */
+  resetAt?: string | null;
+}
+
 /**
  * GET /api/v4/entitlements/quota-summary 返回体, 调用 client.getQuotaSummary 获取.
  *
@@ -368,6 +380,8 @@ export interface QuotaSummary {
   nextFreeExpiresAt?: string;
   /** COMMERCIAL alive 桶中最早到期; 同上 */
   nextPaidExpiresAt?: string;
+  /** 滚动窗口限额状态 (5 小时 / 7 天); 后端未启用窗口限额时字段整个缺失 */
+  windowLimits?: WindowLimitStatus[];
 }
 
 // =============================================================================

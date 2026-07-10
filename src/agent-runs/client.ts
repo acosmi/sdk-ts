@@ -17,6 +17,7 @@ import {
   type AgentRunCreateRequest,
   type AgentRunCreateResponse,
   type AgentRunDownload,
+  type AgentRunErrorPayload,
   type AgentRunListOptions,
   type AgentRunListResult,
   type AgentRunLocalToolHandler,
@@ -986,7 +987,7 @@ function normalizeSettlement(value: Record<string, unknown>) {
   };
 }
 
-function normalizeError(value: unknown): { code?: string; message: string; stage?: string; retryable?: boolean; raw?: unknown } | undefined {
+function normalizeError(value: unknown): AgentRunErrorPayload | undefined {
   if (value == null) return undefined;
   if (typeof value === 'string') return { message: value, raw: value };
   if (!isRecord(value)) return { message: String(value), raw: value };
@@ -995,6 +996,9 @@ function normalizeError(value: unknown): { code?: string; message: string; stage
     message: stringField(value, 'message', 'error') || 'agent run failed',
     stage: optionalStringField(value, 'stage'),
     retryable: typeof value.retryable === 'boolean' ? value.retryable : undefined,
+    // 窗口限额扩展 (code="window_limit_exceeded"): 契约 wire 为 camelCase, 蛇形兼容兜底。
+    windowKind: optionalStringField(value, 'windowKind', 'window_kind'),
+    windowResetAt: optionalStringField(value, 'windowResetAt', 'window_reset_at'),
     raw: value,
   };
 }
