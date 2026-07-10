@@ -190,6 +190,10 @@ export interface AgentRunErrorPayload {
   message: string;
   stage?: string;
   retryable?: boolean;
+  /** 窗口限额场景 (code="window_limit_exceeded"): 触发的窗口档位 "FIVE_HOUR" | "WEEKLY" */
+  windowKind?: string;
+  /** 窗口限额场景: 预计恢复时间 (ISO-8601 UTC) */
+  windowResetAt?: string;
   raw?: unknown;
 }
 

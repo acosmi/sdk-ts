@@ -5,6 +5,21 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2026-07-09 — 窗口限额 (WINDOW_LIMIT_EXCEEDED) 结构化承接
+
+后端新增 5 小时 / 7 天滚动窗口 credit 限额：hold 失败返回 429 + 顶层 `errorCode:"WINDOW_LIMIT_EXCEEDED"` + `windowKind` / `windowResetAt`（`/chat` OpenAI 网关扁平形态与 `/anthropic` Anthropic 形态皆有），agent-run SSE error 事件与额度总览同步扩展。SDK 把机器码与窗口字段结构化透传，并顺带修复 `/chat` 网关错误形态 message 一直解析为空的历史缺口。
+
+### Added
+
+- **`HTTPError.errorCode` / `windowKind` / `windowResetAt`** — 后端业务机器码（响应体顶层 `errorCode`）与窗口限额字段（档位 `'FIVE_HOUR' | 'WEEKLY'`、预计恢复时间 ISO-8601 UTC）结构化上提；`parseHTTPError` 在任一错误形态下透传。构造 options 加性扩展，既有调用零改动。
+- **`isWindowLimitError(err)` / `isWindowLimitStreamError(err)`** — 窗口限额识别：前者是 `HTTPError` type guard（结构化 `errorCode` 优先，message/body 含 `WINDOW_LIMIT_EXCEEDED` 子串防御兜底，覆盖后端部署版本错位期）；后者面向流式产物（`StreamError` / `AgentRunStreamError` / 裸 error payload，`code === 'window_limit_exceeded'` 优先 + 同样的子串兜底）。普通 429 rate limit 不误判。
+- **`AgentRunErrorPayload.windowKind` / `windowResetAt`** — agent-run SSE error 事件可选窗口字段，事件解析（`normalizeError` 白名单 pick）透传，camelCase 契约主拼写 + snake_case 兼容兜底。
+- **`QuotaSummary.windowLimits`（`WindowLimitStatus[]`）** — 额度总览新增滚动窗口限额状态：`{ kind: 'FIVE_HOUR' | 'WEEKLY', limitCredits, usedCredits, resetAt?: string | null }`；后端未启用窗口限额时字段整个缺失，向后兼容。
+
+### Fixed
+
+- **`/chat` OpenAI 网关错误形态 message 丢失** — `parseHTTPError` 此前只解析嵌套 `{error:{type,message}}` 形态；网关顶层扁平形态 `{code:429,message:"..."}` 的 message 恒为空、机器码只存活在 body 原串。现补顶层 `message` 解析（该形态无 error.type 来源，`type` 留空），非 JSON body / 空 body 行为逐字节不变。
+
 ## [2.10.0] - 2026-06-20 — 多模态向量 / 重排序 (qwen3-vl-embedding / qwen3-vl-rerank)
 
 向量与重排序端点扩展为**多模态**（text / image / **video**），对接 DashScope `qwen3-vl-embedding`（多模态向量端点）与 `qwen3-vl-rerank`（原生 rerank 端点 + 多模态 content）。面向自建搜索引擎的图文 / 视频检索场景。计费口径不变（`total_tokens` 套 input 费率），上游模型名仍由管理员后台自填，不在 SDK / 网关硬编码。

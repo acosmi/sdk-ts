@@ -27,8 +27,11 @@ export const coefCacheTTLMs = 8 * 1000;
 
 /**
  * 解析 HTTP 错误响应体，兼容 Anthropic 和 OpenAI 错误格式
- * Anthropic: {"type":"error","error":{"type":"...","message":"..."}}
- * OpenAI:    {"error":{"message":"...","type":"...","code":"..."}}
+ * Anthropic:   {"type":"error","error":{"type":"...","message":"..."}}
+ * OpenAI:      {"error":{"message":"...","type":"...","code":"..."}}
+ * OpenAI 网关: {"code":429,"message":"..."} — /chat 代理路径顶层扁平形态, 无 error 对象
+ * 任一形态下, 顶层 errorCode / windowKind / windowResetAt (窗口限额扩展) 透传到
+ * HTTPError 对应属性。
  * 通用回退: HTTP {status}: {body}
  */
 export function parseHTTPError(statusCode: number, body: Uint8Array | string): HTTPError {
@@ -61,21 +64,40 @@ export function parseHTTPErrorWithHeader(
 
   let type = '';
   let message = '';
+  let errorCode: string | undefined;
+  let windowKind: 'FIVE_HOUR' | 'WEEKLY' | undefined;
+  let windowResetAt: string | undefined;
   try {
     const obj = JSON.parse(bodyStr);
     if (obj && typeof obj === 'object') {
-      const errObj = (obj as { error?: unknown }).error;
+      const top = obj as {
+        error?: unknown;
+        message?: unknown;
+        errorCode?: unknown;
+        windowKind?: unknown;
+        windowResetAt?: unknown;
+      };
+      const errObj = top.error;
       if (errObj && typeof errObj === 'object') {
         const e = errObj as { message?: unknown; type?: unknown };
         if (typeof e.message === 'string') message = e.message;
         if (typeof e.type === 'string') type = e.type;
+      } else if (typeof top.message === 'string') {
+        // OpenAI 网关顶层扁平形态 ({code:number, message:string}, 无 error 对象):
+        // 取顶层 message; type 语义是 anthropic/openai error.type, 此形态无来源 → 留空。
+        message = top.message;
       }
+      // 窗口限额扩展 (任一形态): 顶层业务机器码 + 窗口字段。
+      // windowKind 只收契约冻结档位, 未知档位不伪造进闭合联合 (原值仍在 body 原串)。
+      if (typeof top.errorCode === 'string') errorCode = top.errorCode;
+      if (top.windowKind === 'FIVE_HOUR' || top.windowKind === 'WEEKLY') windowKind = top.windowKind;
+      if (typeof top.windowResetAt === 'string') windowResetAt = top.windowResetAt;
     }
   } catch {
     // 非 JSON, body 原样保留
   }
 
-  return new HTTPError(statusCode, { type, message, retryAfter, body: bodyStr });
+  return new HTTPError(statusCode, { type, message, retryAfter, body: bodyStr, errorCode, windowKind, windowResetAt });
 }
 
 // =============================================================================
