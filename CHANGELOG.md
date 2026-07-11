@@ -5,6 +5,20 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-07-11 — 5 小时窗口软限额 (windowOverridable + 继续开关)
+
+后端把 5 小时窗口改为**软限额**：默认开启（到达 5h 仅提醒、自动继续消耗周配额），用户可关成严格模式（到达即等待恢复）；周窗维持硬限。429 响应体加性新增 `windowOverridable`（5h 严格模式=true，可续跑；周窗/显式禁止/灰度关=false，硬等待），额度总览加 `windowFiveHourContinueEnabled` 与 `WindowLimitStatus.overridable`，并新增设置「继续」开关的客户端方法。全部加性，向后兼容——旧字段/旧调用零改动，老网关不返回新字段时按硬等待处理。
+
+### Added
+
+- **`HTTPError.windowOverridable`** — 窗口限额 429 可否被用户「继续」开关豁免；`parseHTTPError` 解析顶层 `windowOverridable`。缺失（老网关）为 `undefined`，按硬等待处理。构造 options 加性扩展。
+- **`isContinuableWindowLimitError(err)`** — `HTTPError` type guard：`isWindowLimitError(err) && err.windowOverridable === true`，即 5 小时软限额严格模式（可通过 `setWindowContinuePreference(true)` 后重发放行）。周窗/显式禁止/灰度关/老网关均为 false。
+- **`getWindowLimitStreamDetails(err)`** — 从流式窗口限额产物（`StreamError` / `AgentRunStreamError` / 裸 payload）结构化读取 `{ windowKind, windowResetAt, windowOverridable }`；非窗口限额返回 null。
+- **`AgentRunErrorPayload.windowOverridable`** — agent-run SSE error 事件可选可豁免性字段（`omitempty`，false/缺失=硬等待）。
+- **`QuotaSummary.windowFiveHourContinueEnabled`（`boolean`）** — 用户 5h「继续」开关现值（true=软限额/默认；false=严格模式）；仅后端启用窗口限额时下发。
+- **`WindowLimitStatus.overridable`（`boolean`）** — 该窗此刻可否被开关豁免（5h 软限=true，周窗恒 false）。
+- **`Client.setWindowContinuePreference(enabled, { source?, signal? })`** — 设置当前用户 5h 软限额「继续」开关（`POST /entitlements/window-continue-pref`）；`userId` 由网关从鉴权态解析，客户端只传 `enabled` + 可选 `source`（web / crabcode-gui / crabcode-tui / dialog 审计用）。用于个人中心开关与 429 严格模式续跑。
+
 ## [2.11.0] - 2026-07-09 — 窗口限额 (WINDOW_LIMIT_EXCEEDED) 结构化承接
 
 后端新增 5 小时 / 7 天滚动窗口 credit 限额：hold 失败返回 429 + 顶层 `errorCode:"WINDOW_LIMIT_EXCEEDED"` + `windowKind` / `windowResetAt`（`/chat` OpenAI 网关扁平形态与 `/anthropic` Anthropic 形态皆有），agent-run SSE error 事件与额度总览同步扩展。SDK 把机器码与窗口字段结构化透传，并顺带修复 `/chat` 网关错误形态 message 一直解析为空的历史缺口。

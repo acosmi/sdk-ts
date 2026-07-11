@@ -88,6 +88,12 @@ export class HTTPError extends Error {
   windowKind?: 'FIVE_HOUR' | 'WEEKLY';
   /** 窗口限额场景: 预计恢复时间 (ISO-8601 UTC); 缺失为 undefined */
   windowResetAt?: string;
+  /**
+   * [W1 2026-07-11 软限额] 窗口限额场景: 该 429 可否被用户「继续」开关豁免 —
+   * true = 5 小时软限额严格模式 (客户端可提示「继续任务」以消耗周配额继续);
+   * false/缺失 = 周窗/显式禁止/灰度关 (硬等待, 无豁免路径, 老网关不返回时为 undefined)。
+   */
+  windowOverridable?: boolean;
 
   constructor(
     statusCode: number,
@@ -99,6 +105,7 @@ export class HTTPError extends Error {
       errorCode?: string;
       windowKind?: 'FIVE_HOUR' | 'WEEKLY';
       windowResetAt?: string;
+      windowOverridable?: boolean;
     } = {},
   ) {
     let msg: string;
@@ -120,6 +127,7 @@ export class HTTPError extends Error {
     this.errorCode = opts.errorCode;
     this.windowKind = opts.windowKind;
     this.windowResetAt = opts.windowResetAt;
+    this.windowOverridable = opts.windowOverridable;
   }
 }
 
@@ -239,4 +247,37 @@ export function isWindowLimitStreamError(err: unknown): boolean {
     if (typeof field === 'string' && field.includes(windowLimitErrorCode)) return true;
   }
   return false;
+}
+
+/**
+ * [W1 2026-07-11 软限额] 判断错误是否为【可豁免】的窗口限额拒绝 (HTTP 路径) —
+ * 即 5 小时软限额严格模式: 用户此前把「继续」开关关成严格模式, 到达 5h 被 429,
+ * 但可通过重新开启继续 (setWindowContinuePreference(true)) 后重发放行。
+ *
+ * = isWindowLimitError(err) && err.windowOverridable === true。
+ * 周窗 / 显式禁止 / 软限灰度关 / 老网关 (windowOverridable 缺失) 均返回 false (硬等待)。
+ * 客户端据此决定是否展示「继续任务 / 重新开启」入口 (vs 纯「等待刷新」)。
+ */
+export function isContinuableWindowLimitError(err: unknown): err is HTTPError {
+  return isWindowLimitError(err) && err.windowOverridable === true;
+}
+
+/**
+ * [W1 2026-07-11 软限额] 从流式窗口限额 error 事件产物 (StreamError / AgentRunStreamError /
+ * 裸 payload) 结构化读取窗口细节 — 供 crabcode 等消费端区分 5h 软限 (可继续) vs 周窗硬限。
+ *
+ * 非窗口限额错误返回 null; 是则返回 { windowKind, windowResetAt, windowOverridable } (缺字段为 undefined)。
+ * overridable=true ⇒ 5h 严格模式可续跑; 缺失/false ⇒ 硬等待。
+ */
+export function getWindowLimitStreamDetails(
+  err: unknown,
+): { windowKind?: 'FIVE_HOUR' | 'WEEKLY'; windowResetAt?: string; windowOverridable?: boolean } | null {
+  if (!isWindowLimitStreamError(err)) return null;
+  const e = (err ?? {}) as { windowKind?: unknown; windowResetAt?: unknown; windowOverridable?: unknown };
+  const kind = e.windowKind === 'FIVE_HOUR' || e.windowKind === 'WEEKLY' ? e.windowKind : undefined;
+  return {
+    windowKind: kind,
+    windowResetAt: typeof e.windowResetAt === 'string' ? e.windowResetAt : undefined,
+    windowOverridable: typeof e.windowOverridable === 'boolean' ? e.windowOverridable : undefined,
+  };
 }

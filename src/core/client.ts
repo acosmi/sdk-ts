@@ -1068,6 +1068,28 @@ export class Client {
   }
 
   /**
+   * [W1 2026-07-11 软限额] 设置当前用户 5 小时窗口软限额「继续」开关 (v2.12+)。
+   *
+   * enabled=true = 软限额 (到达 5h 后继续消耗周配额, 默认); false = 严格模式 (到达即等待逐步恢复)。
+   * userId 由网关从鉴权态解析 (客户端永不传), 故只需 enabled + 可选 source (审计: web /
+   * crabcode-gui / crabcode-tui / dialog)。用于个人中心开关、429 严格模式「重新开启继续」续跑。
+   *
+   * @returns 网关回显的新状态 { enabled }。
+   */
+  async setWindowContinuePreference(
+    enabled: boolean,
+    opts?: { source?: string; signal?: AbortSignal },
+  ): Promise<{ enabled: boolean }> {
+    const resp = await this.doJSON<APIResponse<{ enabled: boolean }>>(
+      'POST',
+      '/entitlements/window-continue-pref',
+      { enabled, source: opts?.source },
+      opts?.signal,
+    );
+    return { enabled: resp.data.enabled };
+  }
+
+  /**
    * 查询单个模型的能力矩阵
    * 优先从 listModels 缓存读取, miss 时调用 listModels 刷新
    */

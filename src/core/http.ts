@@ -67,6 +67,7 @@ export function parseHTTPErrorWithHeader(
   let errorCode: string | undefined;
   let windowKind: 'FIVE_HOUR' | 'WEEKLY' | undefined;
   let windowResetAt: string | undefined;
+  let windowOverridable: boolean | undefined;
   try {
     const obj = JSON.parse(bodyStr);
     if (obj && typeof obj === 'object') {
@@ -76,6 +77,7 @@ export function parseHTTPErrorWithHeader(
         errorCode?: unknown;
         windowKind?: unknown;
         windowResetAt?: unknown;
+        windowOverridable?: unknown;
       };
       const errObj = top.error;
       if (errObj && typeof errObj === 'object') {
@@ -92,12 +94,23 @@ export function parseHTTPErrorWithHeader(
       if (typeof top.errorCode === 'string') errorCode = top.errorCode;
       if (top.windowKind === 'FIVE_HOUR' || top.windowKind === 'WEEKLY') windowKind = top.windowKind;
       if (typeof top.windowResetAt === 'string') windowResetAt = top.windowResetAt;
+      // [W1 2026-07-11 软限额] 可豁免性 (老网关不返回 → undefined, 客户端按硬等待处理)。
+      if (typeof top.windowOverridable === 'boolean') windowOverridable = top.windowOverridable;
     }
   } catch {
     // 非 JSON, body 原样保留
   }
 
-  return new HTTPError(statusCode, { type, message, retryAfter, body: bodyStr, errorCode, windowKind, windowResetAt });
+  return new HTTPError(statusCode, {
+    type,
+    message,
+    retryAfter,
+    body: bodyStr,
+    errorCode,
+    windowKind,
+    windowResetAt,
+    windowOverridable,
+  });
 }
 
 // =============================================================================
