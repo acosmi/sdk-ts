@@ -360,6 +360,11 @@ export interface WindowLimitStatus {
   usedCredits: number;
   /** 预计恢复时间 (ISO-8601 UTC); 窗口内无用量时为 null / 缺失 */
   resetAt?: string | null;
+  /**
+   * [W1 2026-07-11 软限额] 该窗此刻可否被用户「继续」开关豁免 — 5h 软限额时 true (展示端可给
+   * 严格模式切换入口), 周窗恒 false。老网关不返回时缺失。
+   */
+  overridable?: boolean;
 }
 
 /**
@@ -382,6 +387,11 @@ export interface QuotaSummary {
   nextPaidExpiresAt?: string;
   /** 滚动窗口限额状态 (5 小时 / 7 天); 后端未启用窗口限额时字段整个缺失 */
   windowLimits?: WindowLimitStatus[];
+  /**
+   * [W1 2026-07-11 软限额] 用户 5h「继续」开关现值 (true=软限额/默认: 到达 5h 仅提醒并继续消耗
+   * 周配额; false=严格模式: 到达即等待恢复)。仅后端启用窗口限额时下发, 否则缺失。
+   */
+  windowFiveHourContinueEnabled?: boolean;
 }
 
 // =============================================================================

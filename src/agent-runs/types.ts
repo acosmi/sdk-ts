@@ -194,6 +194,11 @@ export interface AgentRunErrorPayload {
   windowKind?: string;
   /** 窗口限额场景: 预计恢复时间 (ISO-8601 UTC) */
   windowResetAt?: string;
+  /**
+   * [W1 2026-07-11 软限额] 窗口限额场景: 该拒绝可否被用户「继续」开关豁免 (5h 严格模式=true;
+   * 周窗/显式禁止/灰度关=false)。老网关不返回 (omitempty) → 缺失, 客户端按硬等待处理。
+   */
+  windowOverridable?: boolean;
   raw?: unknown;
 }
 

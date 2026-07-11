@@ -18,6 +18,8 @@ import {
   HTTPError,
   RateLimitError,
   StreamError,
+  getWindowLimitStreamDetails,
+  isContinuableWindowLimitError,
   isWindowLimitError,
   isWindowLimitStreamError,
   type AgentRunStreamEvent,
@@ -368,5 +370,115 @@ describe('QuotaSummary.windowLimits', () => {
     );
     const legacy = await legacyClient.getQuotaSummary();
     expect(legacy.windowLimits).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// [W1 2026-07-11 软限额] windowOverridable / 继续开关 (v2.12.0)
+// =============================================================================
+
+describe('parseHTTPError — windowOverridable (软限额)', () => {
+  it('顶层 windowOverridable=true 透传到 HTTPError', () => {
+    const body = JSON.stringify({
+      code: 429,
+      message: '已达 5 小时用量上限，可选择「继续任务」以消耗 7 天窗口配额继续 (WINDOW_LIMIT_EXCEEDED)',
+      errorCode: 'WINDOW_LIMIT_EXCEEDED',
+      windowKind: 'FIVE_HOUR',
+      windowResetAt: '2026-07-09T10:30:00Z',
+      windowOverridable: true,
+    });
+    const err = parseHTTPError(429, body);
+    expect(err.windowOverridable).toBe(true);
+  });
+
+  it('老网关无 windowOverridable → undefined (硬等待语义)', () => {
+    const err = parseHTTPError(429, anthropicWindowBody);
+    expect(err.windowOverridable).toBeUndefined();
+  });
+});
+
+describe('isContinuableWindowLimitError (软限额)', () => {
+  it('5h 严格模式 (windowOverridable=true) → true 且收窄为 HTTPError', () => {
+    const err: unknown = parseHTTPError(
+      429,
+      JSON.stringify({ code: 429, message: 'x (WINDOW_LIMIT_EXCEEDED)', errorCode: 'WINDOW_LIMIT_EXCEEDED', windowKind: 'FIVE_HOUR', windowOverridable: true }),
+    );
+    expect(isContinuableWindowLimitError(err)).toBe(true);
+    if (isContinuableWindowLimitError(err)) {
+      expect(err.windowKind).toBe('FIVE_HOUR');
+    }
+  });
+
+  it('negative: 周窗 / overridable=false / 缺失 / 非窗口限额 均为 false', () => {
+    const weekly = parseHTTPError(429, JSON.stringify({ code: 429, message: 'x (WINDOW_LIMIT_EXCEEDED)', errorCode: 'WINDOW_LIMIT_EXCEEDED', windowKind: 'WEEKLY', windowOverridable: false }));
+    expect(isContinuableWindowLimitError(weekly)).toBe(false);
+    const missing = parseHTTPError(429, anthropicWindowBody); // 无 windowOverridable
+    expect(isWindowLimitError(missing)).toBe(true);
+    expect(isContinuableWindowLimitError(missing)).toBe(false);
+    expect(isContinuableWindowLimitError(new HTTPError(429, { type: 'rate_limit_error', message: 'Too many requests' }))).toBe(false);
+    expect(isContinuableWindowLimitError(null)).toBe(false);
+  });
+});
+
+describe('getWindowLimitStreamDetails (软限额)', () => {
+  it('从流式窗口限额产物读取 kind/resetAt/overridable', () => {
+    const streamErr = new AgentRunStreamError({
+      type: 'error',
+      error: {
+        code: 'window_limit_exceeded',
+        message: '已达 5 小时用量上限',
+        windowKind: 'FIVE_HOUR',
+        windowResetAt: '2026-07-09T10:30:00Z',
+        windowOverridable: true,
+      },
+    });
+    const d = getWindowLimitStreamDetails(streamErr.event.error);
+    expect(d).not.toBeNull();
+    expect(d?.windowKind).toBe('FIVE_HOUR');
+    expect(d?.windowResetAt).toBe('2026-07-09T10:30:00Z');
+    expect(d?.windowOverridable).toBe(true);
+  });
+
+  it('非窗口限额错误 → null; 缺 overridable → undefined (硬等待)', () => {
+    expect(getWindowLimitStreamDetails(new StreamError({ code: 'rate_limit', message: '快' }))).toBeNull();
+    const weekly = getWindowLimitStreamDetails(new StreamError({ code: 'window_limit_exceeded', message: '限' }));
+    expect(weekly).not.toBeNull();
+    expect(weekly?.windowOverridable).toBeUndefined();
+  });
+});
+
+describe('WindowLimitStatus.overridable / QuotaSummary.windowFiveHourContinueEnabled', () => {
+  it('类型形态 + getQuotaSummary 透传新字段', async () => {
+    const limit: WindowLimitStatus = { kind: 'FIVE_HOUR', limitCredits: 123, usedCredits: 200, resetAt: null, overridable: true };
+    expect(limit.overridable).toBe(true);
+    const data = {
+      freeTotalEtu: 0,
+      paidTotalEtu: 5,
+      freeBuckets: [],
+      paidBuckets: [],
+      windowLimits: [{ kind: 'FIVE_HOUR', limitCredits: 123, usedCredits: 200, resetAt: null, overridable: true }],
+      windowFiveHourContinueEnabled: true,
+    };
+    const client = clientWithFetch(async () => jsonResponse({ code: 0, message: 'success', data }));
+    const summary = await client.getQuotaSummary();
+    expect(summary.windowFiveHourContinueEnabled).toBe(true);
+    expect(summary.windowLimits?.[0].overridable).toBe(true);
+  });
+});
+
+describe('setWindowContinuePreference (软限额)', () => {
+  it('POST /entitlements/window-continue-pref 带 {enabled, source}, 回显 enabled', async () => {
+    let capturedUrl = '';
+    let capturedBody: unknown;
+    const client = clientWithFetch(async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return jsonResponse({ code: 0, message: 'success', data: { enabled: false } });
+    });
+
+    const res = await client.setWindowContinuePreference(false, { source: 'crabcode-gui' });
+    expect(capturedUrl).toContain('/entitlements/window-continue-pref');
+    expect(capturedBody).toMatchObject({ enabled: false, source: 'crabcode-gui' });
+    expect(res.enabled).toBe(false);
   });
 });
