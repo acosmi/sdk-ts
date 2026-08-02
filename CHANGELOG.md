@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **类型** — `EmbeddingRequest`/`EmbeddingData`/`EmbeddingResponse`/`RerankRequest`/`RerankResult`/`RerankResponse`。
 - **`listModels` / `listModelsWithStatus` 新增 `opts.includeLocked`** — `true` 时请求 `/managed-models?picker=1` 全集模式：网关把越档模型作为 `Locked=true` 补回返全集，供 C 端选择器展示「付费订阅区」+ 置灰升级引导。缺省行为不变（只返有桶模型，向后兼容）。全集模式不写 `modelCache`，避免 locked 模型混入可用模型集。
 
+## [2.8.0] - 2026-06-16 — 登录 302 重定向承接（successRedirectURL）
+
+> 本条目为 2026-08-02 补记（发版时 CHANGELOG 漏记；事实源 = 独立仓 v2.8.0 tag / npm 2.8.0 / 父仓同步 commit `1f91c394`）。
+
+### Added
+
+- **`LoginOptions.successRedirectURL`（可选）** — 登录成功后的 302 重定向目标（issue C「302 重定向发版」承接）；不传时行为与 2.7.0 完全一致。additive minor，既有调用零改动。
+
 ## [2.7.0] - 2026-06-11 — 远控管理面补齐 + BYOK 密钥客户端 + Chat Bridge CRUD（Phase 7B）
 
 补齐远控核心交互之外的全部管理面（此前下游 CrabCode 只能裸 fetch），新增 BYO 模型密钥客户端，落地 chat-bridge integration/credential 管理面 CRUD——云端控制台与下游调用的是同一组端点同一份租户隔离数据，天然互通。全部方法逐字段对齐 nexus-v4 handler 真实 wire 形状（契约 §12/§14/§18 附录 A）。
@@ -951,6 +959,30 @@ Additive minor。公开类型 / 方法签名零移除、零改名。契约见 `d
 - 36/36 vitest 全绿,源码 typecheck/lint/build 0 错误
 - 翻车机制:`prepublishOnly` 仅跑源码 typecheck/vitest/build,不验证 packed product 在 consumer 视角能否解析
 
+[2.13.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.13.0
+[2.12.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.12.0
+[2.11.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.11.0
+[2.10.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.10.0
+[2.9.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.9.0
+[2.8.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.8.0
+[2.7.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.7.0
+[2.6.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.6.0
+[2.5.1]: https://github.com/acosmi/sdk-ts/releases/tag/v2.5.1
+[2.4.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.4.0
+[2.3.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.3.0
+[2.2.1]: https://github.com/acosmi/sdk-ts/releases/tag/v2.2.1
+[2.2.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.2.0
+[2.1.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.1.0
+[2.0.1]: https://github.com/acosmi/sdk-ts/releases/tag/v2.0.1
+[2.0.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.0.0
+[1.9.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.9.0
+[1.6.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.6.0
+[1.5.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.5.1
+[1.5.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.5.0
+[1.4.2]: https://github.com/acosmi/sdk-ts/releases/tag/v1.4.2
+[1.4.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.4.1
+[1.4.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.4.0
+[1.3.2]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.2
 [1.3.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.1
 [1.3.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.3.0
 [1.2.0]: https://github.com/acosmi/sdk-ts/releases/tag/v1.2.0
@@ -958,3 +990,6 @@ Additive minor。公开类型 / 方法签名零移除、零改名。契约见 `d
 [1.0.2]: https://github.com/acosmi/sdk-ts/releases/tag/v1.0.2
 [1.0.1]: https://github.com/acosmi/sdk-ts/releases/tag/v1.0.1
 [1.0.0]: https://www.npmjs.com/package/@acosmi/sdk-ts/v/1.0.0
+
+<!-- 1.7.0 / 1.8.0 / 1.8.1 / 2.5.0 为未单独发版的内部迭代（无 git tag、无 npm 版本，内容并入下一个发布），故无链接定义。
+     2026-08-02 实证：git ls-remote --tags（v1.6.0 直跳 v1.9.0、v2.4.0 直跳 v2.5.1）+ npm view @acosmi/sdk-ts versions 同形。 -->
