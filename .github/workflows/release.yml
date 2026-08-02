@@ -4,15 +4,25 @@ on:
   push:
     tags:
       - 'v*'
-  # 2026-08-02: tag push 不是可靠的唯一入口。v2.14.0 发版时实测——tag 建得好好的、
-  # workflow active、Actions 权限正常、同仓 push-to-main 触发的 CodeQL 几分钟前刚跑
-  # 成功——但连续 5 次 tag 创建(REST 建 ref / 浅仓 git push / 完整 clone git push)
-  # 全部没有产生任何 run，仓库事件流里连 CreateEvent 都没有(而三次 tag 删除的
-  # DeleteEvent 都在)。同一机制 9 小时前发 v2.13.0 时还是好的，未能定位到成因。
+  # 2026-08-02: 发版入口用 workflow_dispatch，不要依赖 tag push。
   #
-  # 所以补一条不依赖 ref 事件的入口：`gh workflow run release.yml --ref vX.Y.Z`。
-  # 语义与 tag push 完全一致 —— checkout 取 `github.ref`(即那个 tag)，npm publish
-  # 发该 ref 上 package.json 的版本，action-gh-release 也按 `github.ref` 建 Release。
+  # v2.14.0 发版时连续 5 次创建 tag 都没有产生任何 run。根因(已用对照实验查清)：
+  # GitHub 扫描 commit message **全文**(不只标题行)寻找 skip 指令字面量，命中即
+  # 静默跳过该次 push —— tag push 也是 push 事件，跳过时不报错、不留 run。而
+  # subtree split 原样保留 monorepo 的 commit message，monorepo 为省 CI 额度常带
+  # 该指令，标记就这么被带进公开仓落在待发版的 commit 上。后两次尝试的 commit
+  # 标题行是干净的，但正文为了"记录这个现象"引用了该字面量 —— 否认它的那句话
+  # 本身包含了它。
+  #
+  # 对照实验(同一分钟、同一 git push、唯一变量是被 tag 的 commit)：
+  #   message 干净的 commit      → 2 秒内产生 run
+  #   仅正文含该字面量的 commit  → 零 run
+  #
+  # 所以 tag push 并没有坏，`on: push: tags` 保留。仍以 dispatch 为推荐入口，是
+  # 因为它不是 push 事件、对这一整类失败结构性免疫：
+  #   gh workflow run release.yml --ref vX.Y.Z
+  # 语义与 tag push 一致 —— checkout 取 `github.ref`(那个 tag)，npm publish 发该
+  # ref 上 package.json 的版本，action-gh-release 也按 `github.ref` 建 Release。
   # 注意：dispatch 用的是**被指定 ref 上**的 workflow 文件，所以要发的那个 tag
   # 必须已经包含本段。
   workflow_dispatch:
