@@ -2128,6 +2128,13 @@ function zeroModelCapabilities(): ModelCapabilities {
  *   - 同时存在 camelCase 与 snake_case 时, camelCase 胜 (官方契约).
  *   - 仅 snake_case 时, 拷一份到 camelCase 让 SDK 用户只读一个字段.
  *   - 都没有时不补 default ['text'], 留 undefined — 让调用方知道这是 "未声明" 而非 "明确 text-only".
+ *   - **两个分支等价**: 只做键名归一, 不做值过滤。
+ *
+ * 2.14.0 前 snake 分支带一个 {text, image} 白名单过滤, camel 分支不带。由于线上
+ * wire 恒为 camelCase, 那个过滤器从未执行过 —— 是死代码, 但它写下的语义是错的:
+ * 模态值域归网关目录所有 (2026-06-20 起含 'video'), SDK 端硬编码一份已知集去过滤,
+ * 等于替调用方悄悄删掉目录真值, 且与"零硬编码能力集"的原则冲突。收敛为对称透传后,
+ * 容忍未知值的责任明确落在消费端类型上 ({@link InputModalityTag} 是开放的)。
  *
  * 该函数 in-place 修改并返回输入数组 (与现网调用方共享同一引用, 避免额外拷贝).
  */
@@ -2138,9 +2145,9 @@ function normalizeInputModalities(models: ManagedModel[]): ManagedModel[] {
     if (Array.isArray(m.inputModalities)) continue;
     const snake = (m as ManagedModel & { input_modalities?: unknown }).input_modalities;
     if (Array.isArray(snake)) {
-      m.inputModalities = snake.filter(
-        (v): v is 'text' | 'image' => v === 'text' || v === 'image',
-      );
+      // 只收字符串元素 (非字符串是上游畸形值, 留着会让 includes 判定失去意义),
+      // 但绝不按已知模态集裁剪。
+      m.inputModalities = snake.filter((v): v is string => typeof v === 'string');
     }
   }
   return models;

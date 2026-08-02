@@ -222,15 +222,31 @@ export interface RerankResponse {
 }
 
 /**
- * 模型可接收的用户输入模态 (v1.2+).
+ * 模型可接收的用户输入模态 —— **本 SDK 已知的那些** (v1.2+).
  *
  * - 'text': 文本输入
  * - 'image': 截图 / 图片输入 (多模态)
+ * - 'video': 视频输入 (多模态向量 / 重排序类模型, 网关 2026-06-20 起下发)
  *
  * ManagedModel.inputModalities 包含 'image' 才允许向该模型直接发图;
  * 缺失字段时调用方应保守按 text-only / unknown 处理.
+ *
+ * 这个联合体是**查询用**的 (helper 的 modality 参数), 不是数据域的全集 —— 见
+ * {@link InputModalityTag}.
  */
-export type InputModality = 'text' | 'image';
+export type InputModality = 'text' | 'image' | 'video';
+
+/**
+ * 目录里实际可能出现的模态标签 —— **开放值域**.
+ *
+ * 值域由网关托管模型目录持有, 靠运营动作扩张 (不是靠发 SDK 新版)。把数据字段
+ * 声明成封闭联合体, 等于让类型对在网真实数据撒谎; 2026-08-02 CrabCode 客户端
+ * 因同一形态的封闭枚举 (Rust 侧) 把整个网关模型列表打空过数周。
+ *
+ * 因此: **查询**用 {@link InputModality} (已知标签, 有自动补全),
+ * **数据**用本类型 (照收未知标签, 不丢信息、不谎报)。
+ */
+export type InputModalityTag = InputModality | (string & {});
 
 /** BucketClass 字面量常量 — V30 二轮审计 D-P1-3 修复 */
 export const BucketClassCommercial = 'COMMERCIAL';
@@ -316,14 +332,16 @@ export interface ManagedModel {
   /**
    * 模型可接收的用户输入模态 (v1.2+, CrabCode desktop automation / computer-use 选模型用).
    *
-   * 取值: 'text' | 'image' 的子集. 'image' 表示模型可直接接收 screenshot/image 输入.
+   * 已知取值见 {@link InputModality} ('text' | 'image' | 'video'); 'image' 表示模型可
+   * 直接接收 screenshot/image 输入。类型是**开放**的 ({@link InputModalityTag}) ——
+   * 目录新增模态时旧版 SDK 照样原样透出, 不静默丢值。
    *
    * 兼容上游字段名 input_modalities (snake_case) — listModels 在写缓存前会做归一化.
    *
    * **缺失语义**: 上游未下发时该字段为 undefined, 调用方必须保守按 text-only / unknown
    * 处理, 严禁默认假设支持 image. 同样严禁用模型名 substring 反推 modality.
    */
-  inputModalities?: InputModality[];
+  inputModalities?: InputModalityTag[];
 }
 
 // =============================================================================

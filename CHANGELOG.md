@@ -5,6 +5,22 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-08-02 — inputModalities 开放值域归一 (open modality domain)
+
+模态标签的值域由**网关托管模型目录**持有，靠运营动作扩张（`video` 自 2026-06-20 起已是合法值），不靠发 SDK 新版。此前 SDK 在两处把它当成封闭集处理：`InputModality` 类型只列 `text|image`，且 `input_modalities`（snake_case）归一化分支按这份硬编码集裁剪数组——而 camelCase 分支从不裁剪。线上 wire 恒为 camelCase，所以那个过滤器从未真正执行过（死代码），但它把错误语义写进了契约。本版收敛为对称透传，并把数据字段的类型开放。
+
+同一形态的封闭枚举在 CrabCode 客户端（Rust 侧）造成过真实事故：一行目录数据声明 `video`，整个网关模型列表在所有客户端上打空数周。**扩模态的次序是硬的：先客户端、再 SDK、最后网关白名单**。
+
+### Changed
+
+- **`normalizeInputModalities` 两分支对称** — snake_case 分支不再按 `{text, image}` 白名单裁剪，只做键名归一 + 剔除非字符串元素（畸形值）。camelCase 分支行为不变（本就原样透传）。**行为影响仅限**上游改发 snake_case 的假设场景；现网 camelCase 路径逐字节不变。
+- **`InputModality` 加 `'video'`** — 该联合体现在的定位是「**查询用**的已知标签集」（`modelSupportsInputModality` / `findFirstModelByInputModality` 的 `modality` 参数），保留自动补全。
+- **`ManagedModel.inputModalities` 类型放开为 `InputModalityTag[]`** — 数据字段照收目录里的任何标签，未知模态不再被类型谎报成不可能出现。既有消费方（`includes('image')` 族判定）零改动。
+
+### Added
+
+- **`InputModalityTag`（类型）** — `InputModality | (string & {})`：模态标签的**开放**值域。规则是「查询用 `InputModality`，数据用 `InputModalityTag`」。
+
 ## [2.13.0] - 2026-08-01 — 邀请奖励窗口重置券 (window-reset credits)
 
 邀请奖励从"送 token"改为**送窗口重置次数**：被邀请人激活并达到用量门槛后给邀请人发一张重置券，每张可清空一次滚动窗口已用量（只动窗口用量原语，**月度额度池零触碰**）。SDK 加性新增总览查询与核销两个客户端方法，核销支持 `clientRequestId` 幂等键。全部加性，既有调用零改动。
@@ -959,6 +975,7 @@ Additive minor。公开类型 / 方法签名零移除、零改名。契约见 `d
 - 36/36 vitest 全绿,源码 typecheck/lint/build 0 错误
 - 翻车机制:`prepublishOnly` 仅跑源码 typecheck/vitest/build,不验证 packed product 在 consumer 视角能否解析
 
+[2.14.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.14.0
 [2.13.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.13.0
 [2.12.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.12.0
 [2.11.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.11.0

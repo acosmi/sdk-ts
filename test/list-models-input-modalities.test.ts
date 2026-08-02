@@ -128,7 +128,12 @@ describe('listModels — inputModalities 保真与兼容', () => {
     expect(models[0].inputModalities).toEqual(['image']);
   });
 
-  it('snake_case 数组包含非法值 → 过滤后只保留 text|image', async () => {
+  // 2.14.0 翻转 (2026-08-02): 本用例此前断言 snake 分支把 ['text','audio','image','video']
+  // 裁成 ['text','image'] —— 那是在钉住一个缺陷。模态值域归网关目录所有 (2026-06-20 起
+  // 'video' 已是合法值), SDK 端按一份硬编码已知集裁剪, 等于替调用方悄悄删掉目录真值;
+  // 而 camel 分支从不裁剪, 两分支语义分裂。线上 wire 恒为 camelCase, 所以这个过滤器
+  // 从未真正执行 —— 它只是把错误语义写进了契约。现在两分支一律对称透传。
+  it('snake_case 数组原样透传, 包括本版本还不认识的模态标签', async () => {
     const client = clientWithFetch(async () =>
       jsonResponse({
         code: 0,
@@ -142,7 +147,33 @@ describe('listModels — inputModalities 保真与兼容', () => {
             maxTokens: 4096,
             isEnabled: true,
             capabilities: capsWithSidecar,
+            // 'video' = 网关既定合法值; 'audio' = 本版本尚未认识的标签。
+            // 两者都必须原样到达调用方。
             input_modalities: ['text', 'audio', 'image', 'video'],
+          },
+        ],
+      }),
+    );
+
+    const models = await client.listModels();
+    expect(models[0].inputModalities).toEqual(['text', 'audio', 'image', 'video']);
+  });
+
+  it('snake_case 数组里的非字符串元素被剔除 (畸形值, 与模态白名单无关)', async () => {
+    const client = clientWithFetch(async () =>
+      jsonResponse({
+        code: 0,
+        message: 'success',
+        data: [
+          {
+            id: 'm1',
+            name: 'm1',
+            provider: 'dashscope',
+            modelId: 'm1',
+            maxTokens: 4096,
+            isEnabled: true,
+            capabilities: capsWithSidecar,
+            input_modalities: ['text', 42, null, 'image', { v: 1 }],
           },
         ],
       }),
