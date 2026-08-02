@@ -237,7 +237,7 @@ export interface RerankResponse {
 export type InputModality = 'text' | 'image' | 'video';
 
 /**
- * 目录里实际可能出现的模态标签 —— **开放值域**.
+ * 目录里实际可能出现的模态标签 —— **开放值域**, 已知取值见 {@link InputModality}.
  *
  * 值域由网关托管模型目录持有, 靠运营动作扩张 (不是靠发 SDK 新版)。把数据字段
  * 声明成封闭联合体, 等于让类型对在网真实数据撒谎; 2026-08-02 CrabCode 客户端
@@ -245,8 +245,12 @@ export type InputModality = 'text' | 'image' | 'video';
  *
  * 因此: **查询**用 {@link InputModality} (已知标签, 有自动补全),
  * **数据**用本类型 (照收未知标签, 不丢信息、不谎报)。
+ *
+ * 刻意就是朴素 `string`, 不用 `InputModality | (string & {})` 那个"保留补全"的
+ * 技巧: 补全只在**书写**字面量时有价值, 而本类型描述的是**读到**的目录数据;
+ * 那个技巧还要靠 `{}` —— 本仓 eslint `ban-types` 明令禁止。
  */
-export type InputModalityTag = InputModality | (string & {});
+export type InputModalityTag = string;
 
 /** BucketClass 字面量常量 — V30 二轮审计 D-P1-3 修复 */
 export const BucketClassCommercial = 'COMMERCIAL';

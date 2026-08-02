@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`InputModalityTag`（类型）** — `InputModality | (string & {})`：模态标签的**开放**值域。规则是「查询用 `InputModality`，数据用 `InputModalityTag`」。
+- **`InputModalityTag`（类型）** — 模态标签的**开放**值域（即 `string`；已知取值见 `InputModality`）。规则是「查询用 `InputModality`（有补全），数据用 `InputModalityTag`（照收未知标签）」。
 
 ## [2.13.0] - 2026-08-01 — 邀请奖励窗口重置券 (window-reset credits)
 
