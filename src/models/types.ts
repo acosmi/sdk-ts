@@ -395,6 +395,34 @@ export interface QuotaSummary {
 }
 
 // =============================================================================
+// WindowResetSummary — v2.13+ 邀请奖励窗口重置券
+// =============================================================================
+
+/**
+ * GET /api/v4/entitlements/window-reset/summary 返回体, 调用 client.getWindowResetSummary 获取.
+ *
+ * 设计目的: 个人中心邀请栏与 429 窗口限额弹窗一次性展示"我还有几张重置券 + 最近一张何时过期",
+ * 并给出邀请进度 (已达标 / 待达标) 作为继续邀请的引导。
+ *
+ * 券由邀请奖励发放 (被邀请人激活并达到用量门槛后计一次), 每张可清空一次滚动窗口已用量
+ * (见 client.redeemWindowReset)。
+ */
+export interface WindowResetSummary {
+  /** 当前可用 (未使用且未过期) 的重置券张数 */
+  availableCount: number;
+  /** 可用券中最早到期时间 (ISO-8601 UTC); 无可用券时为 null */
+  nextExpireAt: string | null;
+  /** 历史累计发放张数 (含已用 / 已过期) */
+  totalGranted: number;
+  /** 历史累计已使用张数 */
+  totalUsed: number;
+  /** 已达标并已发放重置券的邀请数 */
+  qualifiedInvites: number;
+  /** 已激活但尚未达到发放门槛的邀请数 (仍可能转为已达标) */
+  pendingInvites: number;
+}
+
+// =============================================================================
 // Chat
 // =============================================================================
 

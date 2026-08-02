@@ -5,6 +5,16 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-08-01 — 邀请奖励窗口重置券 (window-reset credits)
+
+邀请奖励从"送 token"改为**送窗口重置次数**：被邀请人激活并达到用量门槛后给邀请人发一张重置券，每张可清空一次滚动窗口已用量（只动窗口用量原语，**月度额度池零触碰**）。SDK 加性新增总览查询与核销两个客户端方法，核销支持 `clientRequestId` 幂等键。全部加性，既有调用零改动。
+
+### Added
+
+- **`Client.getWindowResetSummary(signal?)`** — 查询当前用户窗口重置券总览（`GET /entitlements/window-reset/summary`）；返回 `WindowResetSummary`。`userId` 由网关从鉴权态解析，客户端永不传。用于个人中心邀请栏与 429 窗口限额弹窗展示「还剩几张券 + 最近到期时间 + 邀请进度」。
+- **`Client.redeemWindowReset({ clientRequestId?, signal? })`** — 消费一张重置券清空当前滚动窗口已用量（`POST /entitlements/window-reset/redeem`），返回 `{ remaining }`（扣减后剩余张数）。**幂等键语义**：同一 `clientRequestId` 重放不二次扣券（网关按该键返回首次结果），网络重试 / 用户连点必须复用同一 ID，换 ID = 换一次真实扣券；不传则不幂等。业务错按 SDK 惯例抛 `BusinessError`（message 含机器码）：`NO_AVAILABLE_CREDIT`（无可用券）/ `NO_WINDOW_USAGE`（当前窗口无已用量，不扣券）。
+- **`WindowResetSummary`（类型）** — `{ availableCount, nextExpireAt: string | null, totalGranted, totalUsed, qualifiedInvites, pendingInvites }`：可用券张数、可用券中最早到期时间（无券为 `null`）、累计发放 / 已用张数，以及邀请已达标 / 待达标数。
+
 ## [2.12.0] - 2026-07-11 — 5 小时窗口软限额 (windowOverridable + 继续开关)
 
 后端把 5 小时窗口改为**软限额**：默认开启（到达 5h 仅提醒、自动继续消耗周配额），用户可关成严格模式（到达即等待恢复）；周窗维持硬限。429 响应体加性新增 `windowOverridable`（5h 严格模式=true，可续跑；周窗/显式禁止/灰度关=false，硬等待），额度总览加 `windowFiveHourContinueEnabled` 与 `WindowLimitStatus.overridable`，并新增设置「继续」开关的客户端方法。全部加性，向后兼容——旧字段/旧调用零改动，老网关不返回新字段时按硬等待处理。

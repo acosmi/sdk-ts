@@ -582,6 +582,7 @@ const client = new Client({ serverURL: process.env.ACOSMI_SERVER_URL!, store: ne
 | **Tools**    | `listTools`, `getTool`                                                               |
 | **Wallet**   | `getWalletStats`, `getWalletTransactions`                                            |
 | **Entitlements** | `getBalance`, `getBalanceDetail`, `listEntitlements`, `listConsumeRecords`, `claimMonthlyFree`, `getByModel`, `listBuckets`, `listCoefficients`, `invalidateCoefficientCache` |
+| **Entitlements — 窗口重置券**（v2.13.0+） | `getWindowResetSummary`（邀请奖励券总览）, `redeemWindowReset`（核销一张券清空当前窗口已用量；`clientRequestId` 为幂等键） |
 | **Packages** | `listTokenPackages`, `getTokenPackageDetail`, `buyTokenPackage`, `getOrderStatus`, `listMyOrders`, `waitForPayment` |
 | **Notifications** | `listNotifications`, `getUnreadCount`, `markNotificationRead`, `markAllNotificationsRead`, `deleteNotification`, `registerDevice`, `unregisterDevice`, `listNotificationPreferences`, `updateNotificationPreference` |
 | **Notifications — WebSocket** | `connect`, `disconnect`, `isConnected` (实时推送订阅；浏览器走原生 WebSocket，Node 18-21 需自装 `ws`，Node 22+ 用原生) |

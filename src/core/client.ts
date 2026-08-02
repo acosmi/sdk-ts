@@ -17,6 +17,7 @@ import {
   type ManagedModel,
   type ModelCapabilities,
   type QuotaSummary,
+  type WindowResetSummary,
   type SourcesEvent,
   type StreamEvent,
   type StreamSettlement,
@@ -1087,6 +1088,51 @@ export class Client {
       opts?.signal,
     );
     return { enabled: resp.data.enabled };
+  }
+
+  /**
+   * [W-MEMBERSHIP 2026-08-01 邀请奖励] 查询当前用户窗口重置券总览 (v2.13+)。
+   *
+   * 重置券由邀请奖励发放 (被邀请人激活并达到用量门槛后计一次), 每张可清空一次滚动窗口已用量
+   * (见 redeemWindowReset)。userId 由网关从鉴权态解析, 客户端永不传。
+   * 用于个人中心邀请栏与 429 窗口限额弹窗展示"还剩几张券 + 最近到期时间 + 邀请进度"。
+   *
+   * @returns 券余量 / 最近到期 / 累计发放与使用 / 邀请已达标与待达标数。
+   */
+  async getWindowResetSummary(signal?: AbortSignal): Promise<WindowResetSummary> {
+    const resp = await this.doJSON<APIResponse<WindowResetSummary>>(
+      'GET',
+      '/entitlements/window-reset/summary',
+      null,
+      signal,
+    );
+    return resp.data;
+  }
+
+  /**
+   * [W-MEMBERSHIP 2026-08-01 邀请奖励] 消费一张窗口重置券, 清空当前滚动窗口已用量 (v2.13+)。
+   *
+   * **幂等键语义**: 传 `clientRequestId` 时同一 ID 重放**不会二次扣券** — 网关按该键返回首次
+   * 结果 (`remaining` 与首次一致)。网络重试 / 用户连点必须**复用同一 ID**; 换 ID = 换一次真实
+   * 扣券。不传则不幂等, 每次调用都是一次真实扣券。
+   *
+   * 业务错 (信封 `code != 0`) 按 SDK 惯例抛 `BusinessError` (message 含机器码), 常见两种:
+   *   - `NO_AVAILABLE_CREDIT` — 无可用券 (未发放 / 已用尽 / 已过期)
+   *   - `NO_WINDOW_USAGE` — 当前窗口无已用量, 无可重置 (不扣券)
+   *
+   * @returns 扣减后剩余可用券张数 { remaining }。
+   */
+  async redeemWindowReset(opts?: {
+    clientRequestId?: string;
+    signal?: AbortSignal;
+  }): Promise<{ remaining: number }> {
+    const resp = await this.doJSON<APIResponse<{ remaining: number }>>(
+      'POST',
+      '/entitlements/window-reset/redeem',
+      { clientRequestId: opts?.clientRequestId },
+      opts?.signal,
+    );
+    return { remaining: resp.data.remaining };
   }
 
   /**
