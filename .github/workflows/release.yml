@@ -4,6 +4,18 @@ on:
   push:
     tags:
       - 'v*'
+  # 2026-08-02: tag push 不是可靠的唯一入口。v2.14.0 发版时实测——tag 建得好好的、
+  # workflow active、Actions 权限正常、同仓 push-to-main 触发的 CodeQL 几分钟前刚跑
+  # 成功——但连续 5 次 tag 创建(REST 建 ref / 浅仓 git push / 完整 clone git push)
+  # 全部没有产生任何 run，仓库事件流里连 CreateEvent 都没有(而三次 tag 删除的
+  # DeleteEvent 都在)。同一机制 9 小时前发 v2.13.0 时还是好的，未能定位到成因。
+  #
+  # 所以补一条不依赖 ref 事件的入口：`gh workflow run release.yml --ref vX.Y.Z`。
+  # 语义与 tag push 完全一致 —— checkout 取 `github.ref`(即那个 tag)，npm publish
+  # 发该 ref 上 package.json 的版本，action-gh-release 也按 `github.ref` 建 Release。
+  # 注意：dispatch 用的是**被指定 ref 上**的 workflow 文件，所以要发的那个 tag
+  # 必须已经包含本段。
+  workflow_dispatch:
 
 permissions:
   contents: write
