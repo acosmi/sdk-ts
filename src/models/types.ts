@@ -647,12 +647,114 @@ export interface SourcesEvent {
   session_id?: string;
 }
 
+/** sources 事件结构错误的稳定机器码。 */
+export type SourcesEventIssueCode =
+  | 'invalid_json'
+  | 'missing_sources'
+  | 'sources_not_array'
+  | 'source_not_object'
+  | 'source_title_invalid'
+  | 'source_url_invalid'
+  | 'source_snippet_invalid'
+  | 'session_id_invalid';
+
+/**
+ * sources SSE 的无歧义分类结果。
+ *
+ * `empty_sources` 是合法零结果；`malformed_sources` 才表示结构损坏。
+ */
+export type SourcesEventParseResult =
+  | { kind: 'not_sources' }
+  | { kind: 'empty_sources'; session_id?: string }
+  | { kind: 'sources'; value: SourcesEvent }
+  | { kind: 'malformed_sources'; code: SourcesEventIssueCode };
+
+/**
+ * 同时识别 SSE event name 与 JSON payload discriminator，并把合法空结果
+ * 与非 sources、结构损坏明确分开。未知额外字段不影响分类。
+ */
+export function classifySourcesEvent(ev: StreamEvent): SourcesEventParseResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(ev.data);
+  } catch {
+    return ev.event === 'sources'
+      ? { kind: 'malformed_sources', code: 'invalid_json' }
+      : { kind: 'not_sources' };
+  }
+
+  const wrapper =
+    typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  if (wrapper?.type !== 'sources' && ev.event !== 'sources') {
+    return { kind: 'not_sources' };
+  }
+  if (!wrapper || !Object.prototype.hasOwnProperty.call(wrapper, 'sources')) {
+    return { kind: 'malformed_sources', code: 'missing_sources' };
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(wrapper, 'session_id') &&
+    wrapper.session_id !== undefined &&
+    typeof wrapper.session_id !== 'string'
+  ) {
+    return { kind: 'malformed_sources', code: 'session_id_invalid' };
+  }
+  if (!Array.isArray(wrapper.sources)) {
+    return { kind: 'malformed_sources', code: 'sources_not_array' };
+  }
+
+  const sessionID = typeof wrapper.session_id === 'string' ? wrapper.session_id : undefined;
+  if (wrapper.sources.length === 0) {
+    return {
+      kind: 'empty_sources',
+      ...(sessionID === undefined ? {} : { session_id: sessionID }),
+    };
+  }
+
+  for (const source of wrapper.sources) {
+    if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+      return { kind: 'malformed_sources', code: 'source_not_object' };
+    }
+    const item = source as Record<string, unknown>;
+    if (typeof item.title !== 'string') {
+      return { kind: 'malformed_sources', code: 'source_title_invalid' };
+    }
+    if (typeof item.url !== 'string') {
+      return { kind: 'malformed_sources', code: 'source_url_invalid' };
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(item, 'snippet') &&
+      item.snippet !== undefined &&
+      typeof item.snippet !== 'string'
+    ) {
+      return { kind: 'malformed_sources', code: 'source_snippet_invalid' };
+    }
+  }
+
+  return {
+    kind: 'sources',
+    value: {
+      ...wrapper,
+      sources: wrapper.sources as WebSearchSource[],
+      ...(sessionID === undefined ? {} : { session_id: sessionID }),
+    } as SourcesEvent,
+  };
+}
+
 /**
  * 从 StreamEvent 中解析搜索来源
- * 返回 null 表示该事件不是 sources 类型
+ *
+ * @deprecated 需要区分合法空结果与结构损坏时使用 classifySourcesEvent。
+ * 此 legacy API 保留原有宽松解析和返回对象形状；新代码不得据此区分
+ * 合法空结果与结构损坏。
  */
 export function parseSourcesEvent(ev: StreamEvent): SourcesEvent | null {
-  let wrapper: { type?: string; sources?: WebSearchSource[]; session_id?: string };
+  let wrapper: {
+    type?: string;
+    sources?: WebSearchSource[];
+    session_id?: string;
+  };
   try {
     wrapper = JSON.parse(ev.data);
   } catch {

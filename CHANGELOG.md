@@ -5,6 +5,17 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.15.0] - 2026-08-02 — sources 四态分类与零结果契约
+
+### Added
+
+- **`classifySourcesEvent`** — 同时识别 SSE event name 与 JSON payload discriminator，明确返回 `not_sources`、`empty_sources`、`sources` 或 `malformed_sources`，不再把合法零来源与结构损坏混为同一个状态。
+- **`SourcesEventParseResult` / `SourcesEventIssueCode`** — 为 JSON、数组、item、title、URL、snippet 和 session id 提供稳定机器码；未知额外字段保持兼容。
+
+### Changed
+
+- **`parseSourcesEvent` 保持逐行为向后兼容** — 保留既有宽松解析、`null` 条件和返回对象形状；新调用通过四态 API 获得严格语义，既有 `chatStreamWithUsage` consumer 零变化。
+
 ## [2.14.0] - 2026-08-02 — inputModalities 开放值域归一 (open modality domain)
 
 模态标签的值域由**网关托管模型目录**持有，靠运营动作扩张（`video` 自 2026-06-20 起已是合法值），不靠发 SDK 新版。此前 SDK 在两处把它当成封闭集处理：`InputModality` 类型只列 `text|image`，且 `input_modalities`（snake_case）归一化分支按这份硬编码集裁剪数组——而 camelCase 分支从不裁剪。线上 wire 恒为 camelCase，所以那个过滤器从未真正执行过（死代码），但它把错误语义写进了契约。本版收敛为对称透传，并把数据字段的类型开放。
@@ -975,6 +986,7 @@ Additive minor。公开类型 / 方法签名零移除、零改名。契约见 `d
 - 36/36 vitest 全绿,源码 typecheck/lint/build 0 错误
 - 翻车机制:`prepublishOnly` 仅跑源码 typecheck/vitest/build,不验证 packed product 在 consumer 视角能否解析
 
+[2.15.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.15.0
 [2.14.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.14.0
 [2.13.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.13.0
 [2.12.0]: https://github.com/acosmi/sdk-ts/releases/tag/v2.12.0

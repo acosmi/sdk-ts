@@ -7,7 +7,8 @@
 ## 状态
 
 - **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
-- **当前版本：`2.6.0`**（订阅会员查询 + 一批后端契约类型修正 + WS 一次性 ticket 鉴权，2026-06-04）。
+- **当前版本：`2.15.0`**（sources 四态分类与零结果兼容契约，2026-08-02）。
+- **`v2.15.0`（加性兼容发布）**：新增 `classifySourcesEvent()`、`SourcesEventParseResult` 与稳定 issue code，把 `not_sources`、合法 `empty_sources`、非空 `sources`、`malformed_sources` 明确分开。既有 `parseSourcesEvent()` 的代码路径、宽松判定、`null` 条件和返回对象形状保持原样；现有 consumer 无需改动，新 consumer 才选择严格 API。
 - **`v2.6.0`（会员订阅查询 + 类型修正，2026-06-04）**：新增 `subscription.getMembership()` / `getSubscriptionTier()` / `subscriptionPrecheck()`；`ManagedModel` 补档位门控字段（`locked`/`freeTier`/`minPlanTier`/`chatRuntimeSupported`/`defaultToolIds`）；auth 新增 `ScopeChatBridge`(+read/write/rotate) 与 `chatBridgeScopes()`。**破坏性类型修正**：`BalanceDetail` 形状对齐网关 `InternalBalanceResponse`、`Order` 拆为 `BuyResponse`/`OrderListItem`、`getOrderStatus`/`waitForPayment` 改用 `BuyResponse.paymentStatus`（修死循环）、`PayPayload.payMethod`→`paymentMethod`、`TokenPackage` 对齐 `toProductView`、`WalletStats`/`Transaction` `amount` 由 string 改 number、consume-records 分页修正、notifications WebSocket 用一次性 `stream-ticket` 取代 URL `?token=` JWT。废弃 `listUserSubscriptions`（改用 `getMembership`）、`ModelCoefficient`/`listCoefficients`（系数退役恒空）、`ManagedModel.pricePerMTok`/`isDefault`（公开端点不返回）；notifications 设备/偏好方法标 `@experimental`。详见 CHANGELOG。
 - **`v2.5.1`（格式一致性护栏，2026-05-31）**：`getAdapterForModel` 路由加固 —— `preferred_format` 现仅在**确被 `supported_formats` 收录**时才采信（或 `supported_formats` 未声明时维持原样）。防止上游元数据漂移（如 `preferred_format=anthropic` 但 `supported_formats=[openai]`）把 SDK 路由到模型并不支持的格式端点，撞 `/anthropic`「未绑定 Anthropic」4xx。`supported_formats` 为空/未知（旧上游）时**行为逐字节不变**。新增 3 条 routing 用例钉死矛盾场景。
 - **`v2.5.0`（健康度审计根因修复，2026-05-31）**：源码深度审计后修复一批真实运行时缺陷 —— `agentRuns.downloadArtifact()` 超限不再静默截断而是抛错；本地工具回调 `Promise.race` 硬超时（忽略 `signal` 的 handler 也不再永挂）；OpenAI 流式 `reasoning_content` 后直接 `tool_calls`（无 text）时 block index 不再错乱；非法 `expires_at` 视为过期 + TokenStore 形状校验；OAuth 发现/注册/换/吊销链路统一走注入 `fetchImpl`；空成功响应（204）不再抛 JSON parse error；`apiBaseURL`/`complianceBaseURL` 与 gateway base 同级校验（拒 ws/wss/query/hash）；非流式请求默认超时；WebSocket 重复 connect 先关旧连接；`FileTokenStore.save()` 真 fsync；chat 请求对象不再被原地 mutate；Anthropic `extraBody` 不能覆盖 SDK 管理字段。**公开类型/方法签名零移除、零改名**（新增导出 `normalizeOverrideBaseURL` / `DEFAULT_API_TIMEOUT_MS`）。casehall/finance/enterprise 业务域路径经生产实证确认正确（同源代理直连 tk-dist），**未改**，并新增 URL 组装回归测试钉死契约。
@@ -288,6 +289,33 @@ for await (const ev of stream) {
 ```
 
 `chatStreamWithUsage()` 返回带 usage/error/sources 标签的 AsyncIterable，便于聚合统计（详见 `src/core/client.ts`）。
+
+### Sources SSE 四态分类（v2.15+）
+
+`sources: []` 是检索成功但没有可展示引用的合法零结果，不是传输损坏。需要精确区分状态的新 consumer 使用加性接口 `classifySourcesEvent()`：
+
+```ts
+import { classifySourcesEvent, type StreamEvent } from '@acosmi/sdk-ts';
+
+function consume(event: StreamEvent) {
+  const result = classifySourcesEvent(event);
+  switch (result.kind) {
+    case 'not_sources':
+      return; // 交给其他 SSE 事件处理器
+    case 'empty_sources':
+      return; // 合法 no-op；不得升级为 turn/runtime fatal
+    case 'sources':
+      renderSources(result.value.sources);
+      return;
+    case 'malformed_sources':
+      recordCompatibilityCode(result.code); // 只记录稳定机器码，不记录来源内容
+  }
+}
+```
+
+分类器同时识别 SSE `event: sources` 和 JSON payload `type: "sources"`，校验数组、item、`title`、`url`、可选 `snippet` 与 `session_id` 的类型，并允许未知额外字段。JSON 无法解析但 SSE 已声明为 sources 时返回 `malformed_sources/invalid_json`。
+
+`parseSourcesEvent()` 保留给既有集成：它仍按历史宽松规则解析，空数组、缺失数组、非 sources 或 JSON 损坏仍返回 `null`，非空时仍只返回 `{ sources, session_id }`。它没有改为调用严格分类器，避免严格字段校验改变旧 consumer 对历史/第三方 frame 的接受范围。升级到 2.15.0 不要求关联方迁移；只有需要四态语义的调用方才采用新 API。
 
 ## Agent Runs
 
@@ -1072,7 +1100,16 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.6.0 | **当前版本** | **会员订阅查询 + 一批后端契约类型修正 + WS 一次性 ticket 鉴权（2026-06-04）**。**新增**：`subscription.getMembership()` / `getSubscriptionTier()` / `subscriptionPrecheck()`；`ManagedModel` 档位门控字段 `locked`/`freeTier`/`minPlanTier`/`chatRuntimeSupported`/`defaultToolIds`；auth `ScopeChatBridge`(+read/write/rotate) 与 `chatBridgeScopes()`。**破坏性类型修正**（此前形状与后端不符、运行时即为 undefined）：`BalanceDetail` 对齐网关 `InternalBalanceResponse`（`userId`/`tokenRemaining`/`tokenTotal`/`callRemaining`/`callTotal`/`entitlements[]`）；`Order` 拆为 `BuyResponse`/`OrderListItem`；`getOrderStatus`/`waitForPayment` 改用 `BuyResponse.paymentStatus`（修死循环）；`PayPayload.payMethod`→`paymentMethod` + 枚举 `WECHAT_NATIVE`/`ALIPAY_PRECREATE`/`BANK_TRANSFER` + `deviceId`/`clientRequestId`；`TokenPackage` 对齐 `toProductView`；`WalletStats`/`Transaction` `amount` string→number；consume-records 分页（`records`/`total`/`page`/`pageSize`）；`EntitlementItem.createdAt` 改可选 + `activatedAt`；`ConsumeRecord` 补缓存字段；notifications WebSocket 用一次性 `stream-ticket` 取代 URL `?token=` JWT（修复 WS 鉴权 + 杜绝 JWT 泄露）。**废弃**：`listUserSubscriptions`（改用 `getMembership`）/ `ModelCoefficient`·`listCoefficients`（系数退役恒空）/ `ManagedModel.pricePerMTok`·`isDefault`（公开端点不返回）；notifications `registerDevice`/`unregisterDevice`/`list`+`updateNotificationPreference` 标 `@experimental`（网关无端点）。详见 CHANGELOG。 |
+| 2.15.0 | **当前版本** | **sources 四态分类与零结果契约（2026-08-02）**。加性新增 `classifySourcesEvent`、`SourcesEventParseResult` 与稳定 issue code，区分非 sources、合法空结果、有效结果和结构损坏；未知额外字段继续兼容。既有 `parseSourcesEvent` 的返回形状、宽松解析和 `null` 条件保持不变。 |
+| 2.14.0 | 稳定版 | **托管模型 input modalities 开放值域（2026-08-02）**。snake_case/camelCase 归一规则对称，数据字段允许未来新增标签；查询 API 仍保留已知标签自动补全。现网 camelCase 路径行为不变。 |
+| 2.13.0 | 稳定版 | **邀请奖励窗口重置券（2026-08-01）**。加性新增窗口重置券总览与幂等核销 API，不改变既有 token、额度和会员调用。 |
+| 2.12.0 | 稳定版 | **5 小时窗口软限额（2026-07-11）**。加性透传 `windowOverridable`、继续开关与结构化状态；老网关缺字段时按硬等待处理。 |
+| 2.11.0 | 稳定版 | **窗口限额结构化承接（2026-07-09）**。加性新增 `WINDOW_LIMIT_EXCEEDED` 机器码、窗口种类/恢复时间及识别辅助函数，并修复扁平 `/chat` 错误消息解析。 |
+| 2.10.0 | 稳定版 | **多模态向量与重排序（2026-06-20）**。加性扩展 text/image/video 输入；文本调用保持兼容。 |
+| 2.9.0 | 稳定版 | **Embedding、Rerank 与模型全集模式（2026-06-20）**。新增托管向量/重排序端点和 `includeLocked` 选择器能力。 |
+| 2.8.0 | 稳定版 | **登录 302 重定向承接（2026-06-16）**。加性新增可选 `LoginOptions.successRedirectURL`；缺省行为不变。 |
+| 2.7.0 | 稳定版 | **远控管理面、BYOK 与 Chat Bridge CRUD（2026-06-11）**。加性补齐远控会话管理、密钥管理和第三方聊天平台接入面。 |
+| 2.6.0 | 稳定版 | **会员订阅查询 + 一批后端契约类型修正 + WS 一次性 ticket 鉴权（2026-06-04）**。**新增**：`subscription.getMembership()` / `getSubscriptionTier()` / `subscriptionPrecheck()`；`ManagedModel` 档位门控字段 `locked`/`freeTier`/`minPlanTier`/`chatRuntimeSupported`/`defaultToolIds`；auth `ScopeChatBridge`(+read/write/rotate) 与 `chatBridgeScopes()`。**破坏性类型修正**（此前形状与后端不符、运行时即为 undefined）：`BalanceDetail` 对齐网关 `InternalBalanceResponse`（`userId`/`tokenRemaining`/`tokenTotal`/`callRemaining`/`callTotal`/`entitlements[]`）；`Order` 拆为 `BuyResponse`/`OrderListItem`；`getOrderStatus`/`waitForPayment` 改用 `BuyResponse.paymentStatus`（修死循环）；`PayPayload.payMethod`→`paymentMethod` + 枚举 `WECHAT_NATIVE`/`ALIPAY_PRECREATE`/`BANK_TRANSFER` + `deviceId`/`clientRequestId`；`TokenPackage` 对齐 `toProductView`；`WalletStats`/`Transaction` `amount` string→number；consume-records 分页（`records`/`total`/`page`/`pageSize`）；`EntitlementItem.createdAt` 改可选 + `activatedAt`；`ConsumeRecord` 补缓存字段；notifications WebSocket 用一次性 `stream-ticket` 取代 URL `?token=` JWT（修复 WS 鉴权 + 杜绝 JWT 泄露）。**废弃**：`listUserSubscriptions`（改用 `getMembership`）/ `ModelCoefficient`·`listCoefficients`（系数退役恒空）/ `ManagedModel.pricePerMTok`·`isDefault`（公开端点不返回）；notifications `registerDevice`/`unregisterDevice`/`list`+`updateNotificationPreference` 标 `@experimental`（网关无端点）。详见 CHANGELOG。 |
 | 2.5.1 | 稳定版 | **模型 adapter 格式一致性护栏（2026-05-31）**。`getAdapterForModel` 路由加固：`preferred_format` 仅当被 `supported_formats` 收录（或 `supported_formats` 未声明）才采信，防止上游元数据漂移把 SDK 路由到模型不支持的格式端点（撞 `/anthropic` 4xx）。`supported_formats` 未声明（旧上游）时行为逐字节不变；新增 3 条 routing 用例。详见 CHANGELOG。 |
 | 2.5.0 | 稳定版 | **源码健康度审计根因修复（2026-05-31）**。修复一批真实运行时缺陷：`downloadArtifact()` 超限抛错（不再静默截断）/ 本地工具 `Promise.race` 硬超时 / OpenAI 流式 reasoning→tool_calls block index 修正 / 非法 `expires_at` 视为过期 + TokenStore 校验 / OAuth 链路走注入 `fetchImpl` / 空成功响应（204）不抛 parse error / `apiBaseURL`·`complianceBaseURL` 同级校验 / 非流式默认超时 / WS 重复 connect 关旧连接 / `FileTokenStore.save()` 真 fsync / chat 请求对象不被原地 mutate / Anthropic `extraBody` 不覆盖 SDK 管理字段 / `CompliancePollError` 携带最后状态。**公开类型/方法签名零移除、零改名**（新增导出 `normalizeOverrideBaseURL`·`DEFAULT_API_TIMEOUT_MS`）。casehall/finance/enterprise 路径经生产实证确认正确（同源代理直连 tk-dist）未改 + 新增 URL 组装回归测试。详见 CHANGELOG 与 `docs/audit/TS版SDK源码健康度与文档审计报告.md`。 |
 | 2.4.0 | 稳定版 | **`SkillStoreItem.skillMd?` 透出（additive minor，2026-05-30）**。修复下游经 SDK 拿不到技能 SKILL.md 正文：网关 `SkillStoreResponse` 早已返回 `skillMd`（`ToStoreResponse()` 已 map），但 SDK `SkillStoreItem` 漏声明。新增可选 `skillMd?: string`（Anthropic SKILL.md 正文，仅 Detail/resolve/非 minimal browse 携带；`SkillStoreListItem` minimal 刻意不含正文）；`readme` 一并改为可选 `readme?`（匹配网关 `omitempty`）。零方法签名/运行时改动。下游 CrabCode 重锁 `@acosmi/sdk-ts@2.4.0` + `bun install --force` 生效；SKILL.md 为不可信用户内容，GUI 渲染须 sanitize + 展示 securityLevel/securityScore/certificationStatus。 |
