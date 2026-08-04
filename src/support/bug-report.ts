@@ -11,7 +11,6 @@
 //     调用方无须自行做密钥过滤
 //   - 公开 GET 端点走 doPublicJSON, 无 token 也能调
 
-import type { APIResponse } from '../shared/api-response';
 import { Client } from '../core/client';
 
 /** POST /api/v4/crabcode_cli_feedback 返回体 */
@@ -42,6 +41,43 @@ export interface BugView {
   errors?: unknown[];
   transcript?: unknown[];
   extras?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// 响应解包 —— 这两个端点返回**裸字段**, 不是平台通用的 {code, data, msg} 信封.
+//
+// 真源: nexus-v4 `internal/handler/crabcode_bug.go`
+//   Submit   -> c.JSON(200, gin.H{"feedback_id": ..., "detail_url": ...})
+//   AdminGet -> c.JSON(200, view)
+// Go SDK (bug_report.go, 本文件的移植源) 也是直接 decode 进 BugReportResult,
+// 没有 .data 一层 —— 是本 TS 移植和 Rust 移植自己加了信封.
+//
+// 后果不是「读不到值」这么轻: 加了信封的版本恒返回 undefined, 而网关此时**已经
+// 落库并发出通知邮件**. CrabCode GUI 的「问题反馈」因此两个多月里每次都提示失败,
+// 上游每次都收到一封通知 —— 两边各自看起来都像对方的问题.
+//
+// 这里裸形态优先 + 信封形态兜底: 网关将来若统一成信封, 无需再动 SDK.
+// 两种形态都取不到必填字段时**抛错**, 不静默返回 undefined —— 沉默正是上一版
+// 让调用方无从判断的原因.
+// ---------------------------------------------------------------------------
+
+type EnvelopeTolerant<T> = (T & { data?: T | null }) | undefined;
+type BugReportEnvelopeTolerant = EnvelopeTolerant<Partial<BugReportResult>>;
+type BugViewEnvelopeTolerant = EnvelopeTolerant<Partial<BugView>>;
+
+function unwrapBugReport<T extends object>(
+  raw: EnvelopeTolerant<Partial<T>>,
+  op: string,
+  isComplete: (value: Partial<T>) => boolean,
+): T {
+  if (raw && isComplete(raw)) return raw as T;
+  const inner = raw?.data;
+  if (inner && isComplete(inner)) return inner as T;
+  const keys = raw && typeof raw === 'object' ? Object.keys(raw) : [];
+  throw new Error(
+    `acosmi: ${op}: gateway accepted the request but the response is missing required fields ` +
+      `(observed keys: ${keys.length > 0 ? keys.join(',') : '<none>'})`,
+  );
 }
 
 declare module '@acosmi/sdk-ts' {
@@ -89,13 +125,15 @@ Client.prototype.submitBugReport = async function (
   } catch (e) {
     throw new Error(`acosmi: marshal reportData: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const result = await this.doJSON<APIResponse<BugReportResult>>(
+  const result = await this.doJSON<BugReportEnvelopeTolerant>(
     'POST',
     '/crabcode_cli_feedback',
     { content: contentStr },
     signal,
   );
-  return result.data;
+  return unwrapBugReport(result, 'submitBugReport', (r) =>
+    typeof r.feedback_id === 'string' && r.feedback_id.length > 0,
+  );
 };
 
 Client.prototype.getBugReport = async function (this: Client, bugID: string, signal?: AbortSignal) {
@@ -104,11 +142,11 @@ Client.prototype.getBugReport = async function (this: Client, bugID: string, sig
     throw new Error('acosmi: bugID required');
   }
   // 公开端点 — 不强制 token (账号系统未登录 / token 过期场景下也能查)
-  const resp = await this.doPublicJSON<APIResponse<BugView>>(
+  const resp = await this.doPublicJSON<BugViewEnvelopeTolerant>(
     'GET',
     `/crabcode/bug/${trimmed}`,
     null,
     signal,
   );
-  return resp.data;
+  return unwrapBugReport(resp, 'getBugReport', (r) => typeof r.id === 'string');
 };
