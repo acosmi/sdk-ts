@@ -4,6 +4,7 @@
 
 // === Client + 业务 mixins 宿主 ===
 export {
+  CHAT_REQUEST_TIMEOUT_MS,
   Client,
   DEFAULT_API_TIMEOUT_MS,
   DEFAULT_GATEWAY_BASE_URL,
@@ -16,6 +17,7 @@ export {
   type Config,
   type FilterStatus,
   type ReqTimeoutCtl,
+  type UpstreamActivityCallback,
 } from './client';
 export {
   FilterStatusOK,

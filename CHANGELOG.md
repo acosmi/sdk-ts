@@ -5,6 +5,27 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.16.0] - 2026-08-06 — chat 超时预算真正下传 + 流式活性回调
+
+**一个预算只有在被传下去时才存在。** `chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` 三条推理链路都用 `withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS)` 建了 11 分钟的外层预算，却只把 `ctl.signal` 传给 `doJSONFullRaw` —— 后者的 `timeoutMs` 形参有 **30 秒**默认值，会**另建**一个计时器并恒先于外层触发。于是 v1.6.0 那次"调整为 11min 以容纳 DeepSeek 保活窗口"的改动，**一天都没生效过**，而它上方的注释还在声称它已生效。
+
+这不是理论缺陷。生产网关单日 **29 条** latency 落在 27 831–30 046 ms 的 499（客户端主动断开），横跨 **4 个厂商 5 个模型**；受害最重的恰是各客户端的默认主循环模型 —— 也正是唯一拿到网关 11 分钟长首字节预算的那个 provider。它拿着最宽的服务端预算，死得最惨，因为杀它的计时器在客户端。真实用户主动取消的 latency 是随机的（1 294 / 1 575 ms），与这一串高度聚集的 30 秒在同一张表里一眼可分。
+
+### Fixed
+
+- **`chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` / `generateVideo` 显式下传 `CHAT_REQUEST_TIMEOUT_MS`** —— 与同文件 `embeddings` / `rerank` / `generateImage` 三个一直正确的兄弟调用对齐。`generateVideo` 此前连外层预算都没有，同样被钉在 30 秒；现按其直接兄弟 `generateImage` 的形状修复（单次网络操作，不另加外层 controller）。
+- **`Client.chat` 上方那条 v1.6.0 注释重写** —— 它描述的是一个从未交付的行为。注释与实测冲突时以实测为准，且必须同 PR 修掉；留着它就是给下一个读代码的人埋雷。
+
+### Added
+
+- **`CHAT_REQUEST_TIMEOUT_MS` 导出** —— 供回归闸门按**符号**断言，避免测试抄字面量后与真源各自漂移（抄件断言恒绿 = 零覆盖）。消费方要更短的预算传 `signal` 即可，`withRequestTimeout` 取二者先到者。
+- **`UpstreamActivityCallback` + `chatStream` / `chatMessagesStream` 的第 4 个可选实参 `onUpstreamActivity`** —— 消费方的流空闲看门狗判据是"多久没收到事件"，但 SSE 上有两类**有字节、无事件**的情形对它完全失明：① 上游/网关推理前发的保活注释行被 `isSSECommentLine` 吞掉；② OpenAI 格式下 converter 对某些 data 行返回零事件。**心跳只有在抵达做判决的那一层时才叫心跳** —— 网关补心跳而 SDK 吞掉，等于没补。本回调对每一条 SSE 行触发一次（含注释行），早于任何过滤与解析；回调抛错被吞掉且不中断流（旁路信号不该有能力杀死主链路）。不传时行为逐字节不变。
+
+### 回归闸门
+
+- `test/chat-timeout-budget.test.ts` —— 四条链路的**行为**断言（活过 30 秒、死在 `CHAT_REQUEST_TIMEOUT_MS`），外加一条 **default-deny 结构闸门**：`doJSONFullRaw` 的每个调用点必须显式传预算，控制面端点要豁免须进具名 allowlist 并写明理由。附负向对照，防扫描器坏掉后闸门恒绿。
+- `test/stream-upstream-activity.test.ts` —— 判据是"第一个事件到达前已有 ≥3 次活性"，只可能由 3 条保活注释行产生；刻意不用"活性次数 > 事件数"，那条在注释行根本没进循环时会假绿。
+
 ## [2.15.0] - 2026-08-02 — sources 四态分类与零结果契约
 
 ### Added

@@ -290,6 +290,30 @@ for await (const ev of stream) {
 
 `chatStreamWithUsage()` 返回带 usage/error/sources 标签的 AsyncIterable，便于聚合统计（详见 `src/core/client.ts`）。
 
+### 上游活性回调 `onUpstreamActivity`（v2.16+）
+
+如果你的集成层自带**流空闲看门狗**（"多久没收到事件就判定连接死了"），必须接这个回调，否则看门狗会误杀健康连接。
+
+SSE 上有两类**有字节、无事件**的情形，看门狗对它们完全失明：
+
+1. 上游（如 DeepSeek）与网关在开始推理前发的保活注释行 `: keep-alive` —— 按 SSE 规范它们不构成事件，被 `isSSECommentLine` 跳过；
+2. OpenAI 格式下 converter 对某些 data 行返回零事件。
+
+两种情形连接都健康、字节都在流动。**心跳只有在抵达做判决的那一层时才叫心跳** —— 网关补了心跳而 SDK 吞掉，等于没补。
+
+```ts
+let lastActivity = Date.now();
+
+const stream = client.chatMessagesStream(
+  modelId,
+  { messages, max_tokens: 4096 },
+  abortSignal,
+  () => { lastActivity = Date.now(); },   // ← 每条 SSE 行触发一次，含注释行
+);
+```
+
+语义是「链路刚刚有动静」，不是「来了一个事件」；对每条 SSE 行触发一次，早于任何过滤与解析。回调抛出的错误会被吞掉且不中断流（旁路信号不该有能力杀死主链路）。不传时行为逐字节不变。
+
 ### Sources SSE 四态分类（v2.15+）
 
 `sources: []` 是检索成功但没有可展示引用的合法零结果，不是传输损坏。需要精确区分状态的新 consumer 使用加性接口 `classifySourcesEvent()`：
@@ -1100,7 +1124,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.15.0 | **当前版本** | **sources 四态分类与零结果契约（2026-08-02）**。加性新增 `classifySourcesEvent`、`SourcesEventParseResult` 与稳定 issue code，区分非 sources、合法空结果、有效结果和结构损坏；未知额外字段继续兼容。既有 `parseSourcesEvent` 的返回形状、宽松解析和 `null` 条件保持不变。 |
+| 2.16.0 | **当前版本** | **chat 超时预算真正下传 + 流式活性回调（2026-08-06）**。`chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` / `generateVideo` 此前漏传 `doJSONFullRaw` 的第 5 实参，内层 **30 秒**默认值恒先于外层 11 分钟预算触发 —— v1.6.0 那次"调整为 11min"一天都没生效过（生产实证：单日 29 条 latency≈30 000 ms 的 499，横跨 4 厂商 5 模型，受害最重的是默认主循环模型）。加性导出 `CHAT_REQUEST_TIMEOUT_MS`；`chatStream` / `chatMessagesStream` 新增第 4 个可选实参 `onUpstreamActivity`，让被 `isSSECommentLine` 吞掉的保活注释行（以及 OpenAI 格式下零事件的 data 行）能抵达消费方的空闲看门狗。不传回调时行为逐字节不变。 |
+| 2.15.0 | 稳定版 | **sources 四态分类与零结果契约（2026-08-02）**。加性新增 `classifySourcesEvent`、`SourcesEventParseResult` 与稳定 issue code，区分非 sources、合法空结果、有效结果和结构损坏；未知额外字段继续兼容。既有 `parseSourcesEvent` 的返回形状、宽松解析和 `null` 条件保持不变。 |
 | 2.14.0 | 稳定版 | **托管模型 input modalities 开放值域（2026-08-02）**。snake_case/camelCase 归一规则对称，数据字段允许未来新增标签；查询 API 仍保留已知标签自动补全。现网 camelCase 路径行为不变。 |
 | 2.13.0 | 稳定版 | **邀请奖励窗口重置券（2026-08-01）**。加性新增窗口重置券总览与幂等核销 API，不改变既有 token、额度和会员调用。 |
 | 2.12.0 | 稳定版 | **5 小时窗口软限额（2026-07-11）**。加性透传 `windowOverridable`、继续开关与结构化状态；老网关缺字段时按硬等待处理。 |
@@ -1123,7 +1148,7 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 | 1.8.1 | 稳定版 | **enterprise 企业席位域落地（商品化总规划 P6a）**。新增 `client.enterprise.*`：`listMyEnterprises` / `getEnterprise` / `inviteMember` / `listEnterpriseMembers` / `listOrgSubscriptions` / `listSeats` / `assignSeat` / `revokeSeat` / `getOrgConsumeReport`。OWNER/ADMIN 权限下席位月度变更 ≤ 3 次（超出返 41xxx 业务码）；订阅 + 席位 + 用量报表三视图齐备。 |
 | 1.8.0 | 稳定版 | **casehall 法律案件咨询域落地（商品化总规划 P5 方案 B）**。新增 `client.casehall.*`：`listLawyers` / `getLawyer` / `submitCaseLead` / `listMyCaseLeads` / `getMyCases` / `bookConsultation` / `listMyConsultations` / `listMyLegalOrders` / `listLegalSKUs`。律师库公开端点（VERIFIED + ACTIVE，PII L3 已脱敏）+ 案件线索 + 咨询 + 5 LEGAL_SERVICE SKU；admin 板块 9 模块不在 SDK 边界。 |
 | 1.7.0 | 稳定版 | **subscription + pricing + products 三域落地（商品化总规划 P1-P4）**。`subscription`：`listPlans` / `listUserSubscriptions`（订阅档位 + 用户订阅）。`pricing`：`getPricingConfig` / `quoteCompliance`（公开业务参数 + csign 合规 SKU 报价）。`products`：`getProductBySlug` / `listProductsByFamily` / `listComplianceSkus` / `listPublicModels`（商品中心 productFamily / audience / billingMode 索引）。 |
-| 1.6.0 | 稳定版 | `ChatRequest.endUserId` 业务侧终端用户稳定标识，跨 provider 通用语义；SDK 自动按 wire-format 注入（OpenAI 顶层 `user_id` / Anthropic `metadata.user_id`）；不传时网关从认证身份 HMAC-SHA256 自动派生 32 字符 id。`validateEndUserId(s)` helper 校验 PII / 长度 / 字符集。SSE keep-alive + 11 分钟超时调优；网关侧命中三项隔离能力（内容安全 / KV-cache / 调度）。 |
+| 1.6.0 | 稳定版 | `ChatRequest.endUserId` 业务侧终端用户稳定标识，跨 provider 通用语义；SDK 自动按 wire-format 注入（OpenAI 顶层 `user_id` / Anthropic `metadata.user_id`）；不传时网关从认证身份 HMAC-SHA256 自动派生 32 字符 id。`validateEndUserId(s)` helper 校验 PII / 长度 / 字符集。SSE keep-alive 注释行显式跳过；网关侧命中三项隔离能力（内容安全 / KV-cache / 调度）。**订正（2026-08-06）**：本行原写"11 分钟超时调优"，实际该次改动只建了外层 `AbortController`、未下传给 `doJSONFullRaw`，内层 30 秒默认值始终生效 —— **该调优直到 2.16.0 才真正落地**。 |
 | 1.5.1 | 历史稳定版 | **Docs / examples / 源码注释全量复核与修订 — 无 API 变化**。修补 8 项漂移与遗漏：README API 总览补 25+ 漏列方法（Chat 内部方法、Auth 浏览器 Web OAuth 4 原语、Skills/Notifications/Entitlements/Packages 全量、WS `connect/disconnect/isConnected`）；重写 §"手动 OAuth" 段对齐 `auth.ts` 真实签名；§"双格式红线" + 三个 chat 示例 `maxTokens` → snake_case `max_tokens`；错误表补 `ModelNotFoundError`；§Agent Runs 补 13 类 stream event 完整表；新增 §`sanitize` 命名空间小节；`docs/compliance.md` 6 处 `Since v1.6/.../1.10` 统一为 `v1.5.0 (originally planned as ...)`；手册 §7 scope 数 12 → 15 + 新增 S1-S6 rollup 段；`examples/compliance-evidence-timestamp.ts` 补 `ScopeComplianceReportsWrite`（v1.3.2 漂移生产 401 隐患）；`examples/auth-oauth-flow.ts` + `examples/core-chat.ts` 注释对齐当前契约；`src/index.ts` + `src/browser.ts` + `src/auth/auth.ts` 注释从 Go-port 语义改为"TS 主实现 + Web OAuth 替代品"。`typecheck` / `lint` / `vitest`(214) / `build` / `test:pack` 全绿。 |
 | 1.5.0 | 稳定版 | 沉淀 `src/shared/` 跨域共享 DTO（`PageRequest`/`PageResult` 别名、`OperationId`/`OperationStatus`/`IdempotencyKeyHeader`、`RetryAdvice` 叠加层、`PrincipalRef`/`TenantRef`、`FeatureGateStatus`/`StepUpStatus`/`BillingPreflightResult`）。**同时全量 rollup compliance gateway S1-S6** 能力（原 1.6.0-1.11.0 roadmap，见 [CHANGELOG.md](./CHANGELOG.md)）：S1 6 个分页列表、S2 capabilities + operations 投影、S3 TSA 只读视图、S4 envelope 收尾 + void、S5 合同模板全生命周期 + 2 新 scope（`compliance:contract_template:{read,write}`）、S6 用印执行分页（`listSealUses`）。当前 compliance scope 总数 **15** 个（`complianceScopes()` 返回）。纯增量；8 个平台控制面占位命名空间仍待后端契约就绪后落地。 |
 | 1.4.2 | 稳定版 | `src/` 从扁平 36 文件按业务域重组为 per-domain 目录；公共导出符号集合、`exports`、`dist/` 路径一字未变（纯内部重组）。新增 TypeDoc API 文档。 |

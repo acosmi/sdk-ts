@@ -346,8 +346,38 @@ export const ErrTokenExpired = 'token_expired' as const;
  * 上游 (如 DeepSeek) 在开始推理前可能持续保活长达 10 分钟; SDK 必须容纳
  * "首字节前等待 + 推理 + 流式传输" 全程, 否则会在等待阶段误超时切断。
  * 单值覆盖, 不区分首字节 vs 总耗时 (AbortController 是总耗时上限)。
+ *
+ * 2026-08-06 导出: 供回归闸门按**符号**断言, 避免测试抄字面量后与本常量各自漂移
+ * (抄件断言恒绿 = 零覆盖)。消费方若要自定义更短预算, 传 signal 即可 —
+ * withRequestTimeout 取二者先到者, 无需读本值。
  */
-const CHAT_REQUEST_TIMEOUT_MS = 11 * 60 * 1000;
+export const CHAT_REQUEST_TIMEOUT_MS = 11 * 60 * 1000;
+
+/**
+ * 流式链路的"对端还活着"回调 (2026-08-06)。
+ *
+ * **为什么需要它**: 消费方 (如 CrabCode) 自带流空闲看门狗, 判据是"多久没收到事件"。
+ * 但 SSE 上有两类**有字节、无事件**的情形, 看门狗对它们完全失明:
+ *   1. 上游/网关在推理前发的保活注释行 (": keep-alive") — 被 isSSECommentLine 吞掉
+ *   2. OpenAI 格式下 converter.convert() 对某些 data 行返回零事件
+ * 两种情形下连接都健康、字节在流动, 看门狗却会掐流。心跳只有在**抵达做判决的那一层**
+ * 时才叫心跳 —— 网关补心跳而 SDK 吞掉, 等于没补。
+ *
+ * 本回调对**每一条** SSE 行触发一次 (含注释行), 早于任何过滤与解析。语义是
+ * "链路刚刚有动静", 不是"来了一个事件" —— 消费方拿它重置自己的空闲计时器即可。
+ * 回调抛错会被吞掉且不中断流 (它是旁路信号, 不该有能力杀死主链路)。
+ */
+export type UpstreamActivityCallback = () => void;
+
+/** 触发活性回调; 消费方回调抛错不得污染流 (见 UpstreamActivityCallback)。 */
+function notifyUpstreamActivity(cb: UpstreamActivityCallback | undefined): void {
+  if (!cb) return;
+  try {
+    cb();
+  } catch {
+    /* 旁路信号: 消费方的错误不传播回流式主链路 */
+  }
+}
 
 /**
  * 非流式 JSON API 请求的默认超时 (毫秒)。
@@ -1244,12 +1274,24 @@ export class Client {
   async chat(modelID: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req (buildChatRequest 内部 sanitizer 也会改 rawMessages)。
     const r: ChatRequest = { ...req, stream: false };
-    // v1.6.0: 调整为 CHAT_REQUEST_TIMEOUT_MS (11min), 容纳 DeepSeek 等上游"首字节前 10min 保活"窗口。
+    // 外层 ctl 界定本方法的总预算 (buildChatRequest 的 ensureModelCached 可能出网,
+    // 之后才是 POST — 两段网络操作共享同一条 deadline)。
+    //
+    // 2026-08-06: 内层 doJSONFullRaw 必须**再传一次** CHAT_REQUEST_TIMEOUT_MS。它的
+    // timeoutMs 形参有 30s 默认值, 只传到 ctl.signal 为止时内层会自建 30s 计时器并
+    // 恒先于外层 11min 触发 —— v1.6.0 那次"调整为 11min"因此一天都没生效过 (取证:
+    // 生产网关当日 29 条 latency≈30000ms 的 499, 横跨 4 厂商 5 模型)。
     const ctl = withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS, signal);
     try {
       const { body, adapter } = await this.buildChatRequest(modelID, r, ctl.signal);
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
-      const { result, headers } = await this.doJSONFullRaw('POST', endpoint, body, ctl.signal);
+      const { result, headers } = await this.doJSONFullRaw(
+        'POST',
+        endpoint,
+        body,
+        ctl.signal,
+        CHAT_REQUEST_TIMEOUT_MS,
+      );
 
       const resp = adapter.parseResponse(result);
 
@@ -1330,7 +1372,14 @@ export class Client {
     signal?: AbortSignal,
   ): Promise<VideoTaskResponse> {
     const endpoint = `/managed-models/${encodeURIComponent(modelID)}/videos/generations`;
-    const { result } = await this.doJSONFullRaw('POST', endpoint, req, signal);
+    // 与 generateImage 同级 (11min): 视频任务提交同样经上游网关排队, 30s 默认值不足。
+    const { result } = await this.doJSONFullRaw(
+      'POST',
+      endpoint,
+      req,
+      signal,
+      CHAT_REQUEST_TIMEOUT_MS,
+    );
     return this.unwrapAPIResponse<VideoTaskResponse>(result);
   }
 
@@ -1425,11 +1474,13 @@ export class Client {
       const body = adapter.buildRequestBody(caps, r);
       const data = JSON.stringify(body);
 
+      // 第 5 实参不可省 — 见 chat() 处说明: 缺它内层恒落回 30s 默认值。
       const { result } = await this.doJSONFullRaw(
         'POST',
         `/managed-models/${encodeURIComponent(modelID)}/anthropic`,
         data,
         ctl.signal,
+        CHAT_REQUEST_TIMEOUT_MS,
       );
 
       // 尝试 APIResponse 包装: {"code":0,"message":"...","data":{...}}
@@ -1475,7 +1526,14 @@ export class Client {
       const data = JSON.stringify(body);
 
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
-      const { result } = await this.doJSONFullRaw('POST', endpoint, data, ctl.signal);
+      // 第 5 实参不可省 — 见 chat() 处说明: 缺它内层恒落回 30s 默认值。
+      const { result } = await this.doJSONFullRaw(
+        'POST',
+        endpoint,
+        data,
+        ctl.signal,
+        CHAT_REQUEST_TIMEOUT_MS,
+      );
 
       // 解析 OpenAI 格式响应并转换为 AnthropicResponse
       const { parseOpenAIResponseToAnthropic } = await import('../models/adapters/openai');
@@ -1488,14 +1546,18 @@ export class Client {
   /**
    * 流式聊天 (SSE), 通过 async generator 返回事件
    * v0.5.0: 根据 adapter 路由端点
+   *
+   * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
    */
   chatStream(
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
+    onUpstreamActivity?: UpstreamActivityCallback,
   ): AsyncIterable<StreamEvent> {
     return {
-      [Symbol.asyncIterator]: () => this.chatStreamGen(modelID, req, signal, false),
+      [Symbol.asyncIterator]: () =>
+        this.chatStreamGen(modelID, req, signal, false, onUpstreamActivity),
     };
   }
 
@@ -1503,14 +1565,18 @@ export class Client {
    * Anthropic 原生格式流式聊天 (SSE)
    * 调用 POST /managed-models/:id/anthropic, SSE 事件为 Anthropic 协议格式
    * 无 started/settled/failed 自定义事件, 无 data: [DONE], message_stop 为自然结束
+   *
+   * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
    */
   chatMessagesStream(
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
+    onUpstreamActivity?: UpstreamActivityCallback,
   ): AsyncIterable<StreamEvent> {
     return {
-      [Symbol.asyncIterator]: () => this.chatMessagesStreamGen(modelID, req, signal, false),
+      [Symbol.asyncIterator]: () =>
+        this.chatMessagesStreamGen(modelID, req, signal, false, onUpstreamActivity),
     };
   }
 
@@ -1519,6 +1585,7 @@ export class Client {
     req: ChatRequest,
     signal: AbortSignal | undefined,
     retried: boolean,
+    onUpstreamActivity?: UpstreamActivityCallback,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1558,7 +1625,7 @@ export class Client {
           `stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatStreamGen(modelID, req, signal, true);
+      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity);
       return;
     }
 
@@ -1578,6 +1645,7 @@ export class Client {
 
     let currentEvent = '';
     for await (const line of iterSSELines(resp.body)) {
+      notifyUpstreamActivity(onUpstreamActivity);
       // v1.6.0: 显式跳过 SSE 注释行 (": comment", 如 ": keep-alive")
       if (isSSECommentLine(line)) continue;
       if (line.startsWith('event:')) {
@@ -1605,6 +1673,7 @@ export class Client {
     req: ChatRequest,
     signal: AbortSignal | undefined,
     retried: boolean,
+    onUpstreamActivity?: UpstreamActivityCallback,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1643,7 +1712,7 @@ export class Client {
           `messages stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatMessagesStreamGen(modelID, req, signal, true);
+      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity);
       return;
     }
 
@@ -1661,6 +1730,7 @@ export class Client {
       const converter = newOpenAIStreamConverter();
       let _currentEvent = '';
       for await (const line of iterSSELines(resp.body)) {
+        notifyUpstreamActivity(onUpstreamActivity);
         // v1.6.0: 显式跳过 SSE 注释行
         if (isSSECommentLine(line)) continue;
         if (line.startsWith('event:')) {
@@ -1677,6 +1747,7 @@ export class Client {
       const blockTypeMap = new Map<number, BlockMeta>();
       let currentEvent = '';
       for await (const line of iterSSELines(resp.body)) {
+        notifyUpstreamActivity(onUpstreamActivity);
         // v1.6.0: 显式跳过 SSE 注释行
         if (isSSECommentLine(line)) continue;
         if (line.startsWith('event:')) {
@@ -1860,7 +1931,19 @@ export class Client {
     }
   }
 
-  /** doJSONFull 的 raw bytes 变体 (chat 用, 不立即 JSON.parse) */
+  /**
+   * doJSONFull 的 raw bytes 变体 (chat 用, 不立即 JSON.parse)
+   *
+   * ⚠️ 契约 (2026-08-06): `timeoutMs` 的 30s 默认值只适用于**控制面**端点 (列目录 /
+   * 查配额 / 取任务状态)。凡走**模型推理或生成**的端点 —— chat / anthropic /
+   * embeddings / rerank / images / videos —— 一律必须显式传入 `CHAT_REQUEST_TIMEOUT_MS`,
+   * 哪怕调用方已经用 `withRequestTimeout` 建了外层预算: 外层只约束 `signal`, 内层
+   * 会**另建**一个 `timeoutMs` 计时器, 30s 恒先于任何更长的外层预算触发。
+   *
+   * 这不是假设 —— 2026-08-06 事故里 chat 路径正因漏传本参数而被恒定钉死在 30s,
+   * 且上方 v1.6.0 的注释还声称它已是 11min。回归闸门见
+   * `tests/chat-timeout-budget.test.ts`。
+   */
   async doJSONFullRaw(
     method: string,
     path: string,
