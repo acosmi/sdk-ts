@@ -50,6 +50,16 @@ export const ScopeChatBridgeWrite = 'chat_bridge:write';
 /** 轮换 / 吊销凭证 (高风险)。 */
 export const ScopeChatBridgeRotate = 'chat_bridge:rotate';
 
+/**
+ * 会员委托 Key 控制面 scope (2026-08-14 开放 API 方案)。
+ *
+ * 高风险且**刻意不进 allScopes()**: 持有它即可签发"长期代表本人会员权益调用模型"的静态凭证,
+ * 桌面登录不应自动获得该能力 —— 调用方必须显式申请, 用户才会在同意页看到这项授权。
+ * 服务端三条约束一起才闭合 (见 Go desktop_oauth.go): 不并入任何分组展开、不得签进 sk- Key、
+ * 签发接口只接受有同意页的 desktop OAuth 或同源登录态。
+ */
+export const ScopeAgentAccessManage = 'agent_access:manage';
+
 /** @deprecated 旧细粒度 scope, 保留向后兼容, 新代码请用分组 scope */
 export const ScopeModels = 'models';
 /** @deprecated */
@@ -104,4 +114,12 @@ export function remoteControlScopes(): string[] {
  */
 export function chatBridgeScopes(): string[] {
   return [ScopeChatBridge];
+}
+
+/**
+ * 会员委托 Key 控制面 scope (需显式申请; allScopes() 不含本项)。
+ * 典型用法: `authorize({ scopes: [...allScopes(), ...agentAccessScopes()] })`
+ */
+export function agentAccessScopes(): string[] {
+  return [ScopeAgentAccessManage];
 }

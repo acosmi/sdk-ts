@@ -394,6 +394,14 @@ export async function authorize(
 
   const verifier = await generateCodeVerifier();
   const challenge = await codeChallenge(verifier);
+  // [2026-08-14] 桌面 loopback 也发送并校验 state。
+  //
+  // 此前桌面流一律不带 state, 理由是"本地回环天然防 CSRF"。这个理由并不成立: 回环监听在整个
+  // 流程期间对**本机任意进程**开放, 一个本地恶意进程只要往
+  // http://127.0.0.1:<port>/callback?code=<攻击者的授权码> 打一枪, SDK 就会拿别人的授权码换
+  // token, 把用户会话接到攻击者账号上 (login-CSRF)。端口随机但可枚举。state 让这枪必须先猜中
+  // 32 字节随机数。Web 流早就有 state 校验, 这里补齐的是同一道闸。
+  const state = await generateState();
 
   const http = await import('node:http');
 
@@ -413,6 +421,10 @@ export async function authorize(
     codeResolver = resolve;
     codeRejecter = reject;
   });
+  // 回调可能在下面的 Promise.race 挂上处理器**之前**就被拒绝 (例如本地回环立刻收到一个
+  // state 不匹配的请求)。先挂一个空 catch, 让 Node 不把它记成 unhandled rejection ——
+  // 真正的错误仍由 race 里的同一个 promise 抛给调用方, 语义不变。
+  codePromise.catch(() => {});
 
   server.on('request', (req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
@@ -422,6 +434,21 @@ export async function authorize(
       return;
     }
     const code = url.searchParams.get('code');
+    // state 校验必须在消费 code **之前** —— 一旦 resolve, 后续立刻拿它去换 token。
+    if (code && url.searchParams.get('state') !== state) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(
+        `<!DOCTYPE html><html><head><meta charset="utf-8"><title>授权失败</title></head>` +
+          `<body style="font-family:system-ui,sans-serif;text-align:center;padding:60px 20px">` +
+          `<h2>授权失败</h2><p>回调校验未通过, 已中止登录。</p>` +
+          `<p style="color:#888;font-size:14px">可以关闭此窗口。</p>` +
+          `</body></html>`,
+      );
+      codeRejecter(
+        new Error(`authorize: ${ErrStateMismatch}: callback state does not match pending state (possible CSRF)`),
+      );
+      return;
+    }
     if (!code) {
       const errMsg =
         url.searchParams.get('error_description') || url.searchParams.get('error') || '';
@@ -468,6 +495,7 @@ export async function authorize(
   authURL.searchParams.set('response_type', 'code');
   authURL.searchParams.set('code_challenge', challenge);
   authURL.searchParams.set('code_challenge_method', 'S256');
+  authURL.searchParams.set('state', state);
   if (scopes.length > 0) {
     authURL.searchParams.set('scope', scopes.join(' '));
   }
@@ -509,7 +537,9 @@ export async function authorize(
     return { result: { code, redirectURI }, verifier };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes('denied')) {
+    if (msg.includes(ErrStateMismatch)) {
+      emit({ type: EventError, err_code: ErrStateMismatch, error: msg });
+    } else if (msg.includes('denied')) {
       emit({ type: EventError, err_code: ErrAuthDenied, error: msg });
     } else if (msg.includes('timed out')) {
       emit({ type: EventError, err_code: ErrTimeout, error: msg });
@@ -594,8 +624,8 @@ export interface CreateWebAuthorizationRequestOptions {
 /**
  * 构造 Web OAuth 授权请求。
  *
- * 生成 PKCE verifier + S256 challenge + CSRF state，按 OAuth 2.1 拼装授权 URL
- * (含 `state` 参数 — SDK 桌面 `authorize` 不带 state, Web 流程必须带)。
+ * 生成 PKCE verifier + S256 challenge + CSRF state，按 OAuth 2.1 拼装授权 URL。
+ * (自 2026-08-14 起桌面 `authorize` 同样带 state 并在回调时校验; Web 流程本就必须带。)
  *
  * 返回的 `WebAuthorizationRequest` 应整体持久化为 pending 状态，
  * callback 阶段交给 `completeWebAuthorizationRequest`。
