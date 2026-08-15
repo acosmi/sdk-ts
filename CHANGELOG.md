@@ -5,6 +5,20 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.17.0] - 2026-08-15 — 桌面 loopback OAuth state 全路径闸 + 端口确定性关闭
+
+**回环监听在整个登录期间对本机任意进程开放，state 是唯一的门。** 2.16.0 及更早版本的桌面 loopback `authorize` 不生成也不校验 OAuth `state`（`af2daa0b` 已在源码补上核心校验，但从未发版）；且校验只覆盖"带 code"的回调 —— 携带 OAuth error 的回调**绕过 state 直接把登录结算成"用户已拒绝"**，本机恶意进程不猜任何秘密就能打断/塑形一次等待中的登录；重复 `state` 参数取首值即可蒙混（`?code=攻击者的码&state=<正确值>&state=x` 在旧实现下**成功登录到攻击者会话**）。本版把 state 校验提到 `/callback` 所有形态之前，并收紧为"恰好一个"。
+
+### Fixed
+
+- **`/callback` 全形态 state 先行校验** —— 成功回调、OAuth error 回调、畸形回调一律先验 state 再消费 code / 结算 denied。缺失、重复（含重复的正确值）、错值均以稳定错误码 `state_mismatch` 拒绝本次登录、返回安全失败页并关闭 listener；错误信息只描述形态，不回显 code / state / token / 完整 callback query。
+- **"恰好一个 state"** —— `searchParams.getAll('state').length === 1` 且严格等值；重复参数不再因 `get()` 取首值而通过。
+- **端口确定性关闭** —— `finally` 里在 `server.close()` 后补 `closeIdleConnections?.()`：Node 18 上 `close()` 不关浏览器残留的 idle keep-alive 连接，端口会滞留到对端松手；现在每条终止路径（成功 / 各类 state 失败 / 用户拒绝 / 超时 / 取消 / 浏览器打开失败）都以端口完全关闭收尾。
+
+### 回归闸门
+
+- `test/auth/desktop-loopback-state.test.ts` —— 十路终止矩阵：成功、缺失 state、错误 state、重复 state（异值与同值）、恶意先到回调后合法回调不能复活、用户拒绝（正确 state + OAuth error → `auth_denied`）、超时、取消（pre-aborted signal）、浏览器打开失败后手动回调仍可完成；每条路径断言**只结算一次**（事件流恰一条 error / 结果不可翻转）且**新连接最终被拒**（listener teardown）。对 2.16.0 实测：4 条缺口用例全红（其中"重复 state 首值正确"在旧实现下以攻击者 code 成功 resolve），6 条保行为用例双版本皆绿。
+
 ## [2.16.0] - 2026-08-06 — chat 超时预算真正下传 + 流式活性回调
 
 **一个预算只有在被传下去时才存在。** `chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` 三条推理链路都用 `withRequestTimeout(CHAT_REQUEST_TIMEOUT_MS)` 建了 11 分钟的外层预算，却只把 `ctl.signal` 传给 `doJSONFullRaw` —— 后者的 `timeoutMs` 形参有 **30 秒**默认值，会**另建**一个计时器并恒先于外层触发。于是 v1.6.0 那次"调整为 11min 以容纳 DeepSeek 保活窗口"的改动，**一天都没生效过**，而它上方的注释还在声称它已生效。

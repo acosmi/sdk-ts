@@ -433,9 +433,21 @@ export async function authorize(
       res.end();
       return;
     }
-    const code = url.searchParams.get('code');
-    // state 校验必须在消费 code **之前** —— 一旦 resolve, 后续立刻拿它去换 token。
-    if (code && url.searchParams.get('state') !== state) {
+    // state 校验对 /callback 的**每一种**形态先行 —— 成功回调、OAuth error 回调、畸形回调
+    // 一视同仁, 且必须在消费 code / 结算 denied **之前**。否则本机任意进程不猜 state 也能
+    // 伪造一发 ?error=access_denied 把等待中的登录打成"用户已拒绝" (login-DoS / 状态注入)。
+    // "恰好一个": 重复 state 参数不允许蒙混 (searchParams.get 只取首值), 缺失与错值同罪。
+    // 错误信息只描述形态, 不回显任何回调取值 (不记录 code / state / token / 完整 query)。
+    const states = url.searchParams.getAll('state');
+    const stateFailure =
+      states.length === 0
+        ? 'callback missing state'
+        : states.length > 1
+          ? 'callback carried multiple state values'
+          : states[0] !== state
+            ? 'callback state does not match pending state'
+            : null;
+    if (stateFailure !== null) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(
         `<!DOCTYPE html><html><head><meta charset="utf-8"><title>授权失败</title></head>` +
@@ -444,11 +456,10 @@ export async function authorize(
           `<p style="color:#888;font-size:14px">可以关闭此窗口。</p>` +
           `</body></html>`,
       );
-      codeRejecter(
-        new Error(`authorize: ${ErrStateMismatch}: callback state does not match pending state (possible CSRF)`),
-      );
+      codeRejecter(new Error(`authorize: ${ErrStateMismatch}: ${stateFailure} (possible CSRF)`));
       return;
     }
+    const code = url.searchParams.get('code');
     if (!code) {
       const errMsg =
         url.searchParams.get('error_description') || url.searchParams.get('error') || '';
@@ -549,7 +560,11 @@ export async function authorize(
     throw e;
   } finally {
     if (abortHandler && signal) signal.removeEventListener('abort', abortHandler);
+    // close() 只停止接受新连接; Node 18 上浏览器残留的 idle keep-alive 连接会让端口
+    // 迟迟不真正释放 (Node 19+ 才随 close 一并关 idle)。登录已结算, 显式关掉 idle 连接,
+    // 让每条终止路径都以"端口完全关闭"收尾。响应都在结算前已 end(), 不存在截断风险。
     server.close();
+    server.closeIdleConnections?.();
   }
 }
 
