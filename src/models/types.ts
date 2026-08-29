@@ -325,6 +325,14 @@ export interface ManagedModel {
   preferred_format?: string;
 
   /**
+   * 该模型可选的思考深度档位 id（升序，v2.18+）。取值是 {@link ThinkingOff} / {@link ThinkingHigh} /
+   * {@link ThinkingMax} 的子集；网关按「admin 声明 ∩ wire 层真投递」读时派生。
+   * `[]` = 该模型没有思考档（不要渲染档位选择）；`undefined` = 上游未播报（旧网关），
+   * 调用方必须按"未知"处理，严禁回落到自己推档或按模型名猜。
+   */
+  thinking_levels?: string[];
+
+  /**
    * 当前用户在此模型上的桶余额聚合 (V0.18 V30 entitlement-listing).
    *
    * 仅当调用方为非 admin 用户 (web user / desktop OAuth) 时上游才会返回此字段:

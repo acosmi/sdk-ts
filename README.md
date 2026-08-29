@@ -7,7 +7,8 @@
 ## 状态
 
 - **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
-- **当前版本：`2.17.0`**（桌面 loopback OAuth state 全路径闸 + 端口确定性关闭，2026-08-15）。
+- **当前版本：`2.18.0`**（`ManagedModel.thinking_levels` 类型面对齐，2026-08-29）。
+- **`v2.18.0`（加性类型发布）**：`ManagedModel` 新增可选字段 `thinking_levels?: string[]` —— 网关下发的**升序思考档位 id 列表**（`ThinkingOff`/`ThinkingHigh`/`ThinkingMax` 的子集）。`listModels` 对它原样透传，公开签名向后兼容、零行为变化；`[]` = 该模型无思考档，`undefined` = 旧网关未播报（按"未知"处理，严禁自行推档）。详见〈思考档位 `thinking_levels`〉。
 - **`v2.17.0`（安全修复发布）**：桌面 loopback `authorize()` 对 `/callback` 的**一切形态**（成功 / OAuth error / 畸形）先行校验 CSRF `state`，且必须"恰好一个"并严格等值 —— 缺失、重复（含重复的正确值）、错值一律以稳定错误码 `state_mismatch` 拒绝本次登录；此前携带 OAuth error 的回调绕过 state 直接结算 `auth_denied`，本机任意进程零知识即可打断/塑形等待中的登录，且 `?code=…&state=<正确值>&state=x` 这类重复参数可蒙混通过。`finally` 补 `closeIdleConnections()`，每条终止路径以端口完全关闭收尾。公开 API 签名零变化；回归闸门 `test/auth/desktop-loopback-state.test.ts` 十路终止矩阵。
 - **`v2.15.0`（加性兼容发布）**：新增 `classifySourcesEvent()`、`SourcesEventParseResult` 与稳定 issue code，把 `not_sources`、合法 `empty_sources`、非空 `sources`、`malformed_sources` 明确分开。既有 `parseSourcesEvent()` 的代码路径、宽松判定、`null` 条件和返回对象形状保持原样；现有 consumer 无需改动，新 consumer 才选择严格 API。
 - **`v2.6.0`（会员订阅查询 + 类型修正，2026-06-04）**：新增 `subscription.getMembership()` / `getSubscriptionTier()` / `subscriptionPrecheck()`；`ManagedModel` 补档位门控字段（`locked`/`freeTier`/`minPlanTier`/`chatRuntimeSupported`/`defaultToolIds`）；auth 新增 `ScopeChatBridge`(+read/write/rotate) 与 `chatBridgeScopes()`。**破坏性类型修正**：`BalanceDetail` 形状对齐网关 `InternalBalanceResponse`、`Order` 拆为 `BuyResponse`/`OrderListItem`、`getOrderStatus`/`waitForPayment` 改用 `BuyResponse.paymentStatus`（修死循环）、`PayPayload.payMethod`→`paymentMethod`、`TokenPackage` 对齐 `toProductView`、`WalletStats`/`Transaction` `amount` 由 string 改 number、consume-records 分页修正、notifications WebSocket 用一次性 `stream-ticket` 取代 URL `?token=` JWT。废弃 `listUserSubscriptions`（改用 `getMembership`）、`ModelCoefficient`/`listCoefficients`（系数退役恒空）、`ManagedModel.pricePerMTok`/`isDefault`（公开端点不返回）；notifications 设备/偏好方法标 `@experimental`。详见 CHANGELOG。
@@ -176,6 +177,21 @@ console.log(res.videoUrl); // VideoTaskResponse: taskId / status / videoUrl / er
 | 其他 | `style` | `duration`（秒） |
 
 > 字段是网关**通用契约**；某厂商支持哪些取值由上游模型决定（如万相尺寸 `宽*高` 星号格式由网关代转）。网关适配范围：OpenAI 兼容图片 + 火山引擎（即梦/豆包）视频 + DashScope 通义万相（wanx）原生异步任务（图片+视频）。
+
+## 思考档位 `thinking_levels`（v2.18+）
+
+`ManagedModel.thinking_levels?: string[]` —— 该模型**可选的思考深度档位 id**，升序下发，取值是 `ThinkingOff` / `ThinkingHigh` / `ThinkingMax`（`'off'` / `'high'` / `'max'`）的子集。网关按「admin 声明 ∩ wire 层真投递」读时派生；`listModels` 对它**原样透传**（与 `supported_formats` / `preferred_format` 同为 wire snake_case，不做 camelCase 重映射）。
+
+**三态必须分开处理 —— `[]` 与 `undefined` 不是同一件事**：
+
+```ts
+const m = (await client.listModels()).find((x) => x.id === modelId)!;
+if (m.thinking_levels === undefined) renderThinkingUnknown();     // 旧网关未播报 → 按"未知"处理
+else if (m.thinking_levels.length === 0) hideThinkingPicker();    // 该模型没有思考档 → 不渲染档位选择
+else renderThinkingPicker(m.thinking_levels);                     // 升序档位, 原样渲染
+```
+
+缺失时**严禁**自己推档或按模型名 substring 猜 —— 档位值域归网关模型目录所有，靠运营动作扩张，不靠发 SDK 新版（同 `inputModalities` 开放值域的教训，见 v2.14.0）。该字段与 `capabilities.supports_thinking` / `supports_max_effort` 是**正交**两件事：后者描述模型有无该能力，前者描述**这条链路上此刻真能选哪几档**。
 
 ## 向量 / 重排序（托管模型网关，v2.9+）
 
@@ -1127,7 +1143,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.17.0 | **当前版本** | **桌面 loopback OAuth state 全路径闸 + 端口确定性关闭（2026-08-15）**。`/callback` 一切形态（成功 / OAuth error / 畸形）先验 `state` 且必须恰好一个并严格等值；缺失 / 重复（含重复的正确值）/ 错值一律 `state_mismatch` 拒绝且不再被误结算为 `auth_denied`；错误信息只描述形态，不回显 code / state / token / 完整 callback query。`finally` 补 `closeIdleConnections()`（Node 18 上 `close()` 不关残留 idle keep-alive）。用户真拒绝（OAuth error + 正确 state）语义保留为 `auth_denied`。公开 API 签名零变化。 |
+| 2.18.0 | **当前版本** | **`ManagedModel.thinking_levels` 类型面对齐（2026-08-29）**。加性新增可选字段 `thinking_levels?: string[]`：网关下发的升序思考档位 id 列表（`'off'`/`'high'`/`'max'` 的子集，按「admin 声明 ∩ wire 层真投递」派生）。`listModels` 原样透传，无归一化、无新方法、公开签名零变化。`[]` = 该模型无思考档；`undefined` = 旧网关未播报，调用方按"未知"处理，严禁按模型名推档。 |
+| 2.17.0 | 稳定版 | **桌面 loopback OAuth state 全路径闸 + 端口确定性关闭（2026-08-15）**。`/callback` 一切形态（成功 / OAuth error / 畸形）先验 `state` 且必须恰好一个并严格等值；缺失 / 重复（含重复的正确值）/ 错值一律 `state_mismatch` 拒绝且不再被误结算为 `auth_denied`；错误信息只描述形态，不回显 code / state / token / 完整 callback query。`finally` 补 `closeIdleConnections()`（Node 18 上 `close()` 不关残留 idle keep-alive）。用户真拒绝（OAuth error + 正确 state）语义保留为 `auth_denied`。公开 API 签名零变化。 |
 | 2.16.0 | 稳定版 | **chat 超时预算真正下传 + 流式活性回调（2026-08-06）**。`chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` / `generateVideo` 此前漏传 `doJSONFullRaw` 的第 5 实参，内层 **30 秒**默认值恒先于外层 11 分钟预算触发 —— v1.6.0 那次"调整为 11min"一天都没生效过（生产实证：单日 29 条 latency≈30 000 ms 的 499，横跨 4 厂商 5 模型，受害最重的是默认主循环模型）。加性导出 `CHAT_REQUEST_TIMEOUT_MS`；`chatStream` / `chatMessagesStream` 新增第 4 个可选实参 `onUpstreamActivity`，让被 `isSSECommentLine` 吞掉的保活注释行（以及 OpenAI 格式下零事件的 data 行）能抵达消费方的空闲看门狗。不传回调时行为逐字节不变。 |
 | 2.15.0 | 稳定版 | **sources 四态分类与零结果契约（2026-08-02）**。加性新增 `classifySourcesEvent`、`SourcesEventParseResult` 与稳定 issue code，区分非 sources、合法空结果、有效结果和结构损坏；未知额外字段继续兼容。既有 `parseSourcesEvent` 的返回形状、宽松解析和 `null` 条件保持不变。 |
 | 2.14.0 | 稳定版 | **托管模型 input modalities 开放值域（2026-08-02）**。snake_case/camelCase 归一规则对称，数据字段允许未来新增标签；查询 API 仍保留已知标签自动补全。现网 camelCase 路径行为不变。 |

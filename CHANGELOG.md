@@ -5,6 +5,18 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.18.0] - 2026-08-29 — `ManagedModel.thinking_levels` 类型面对齐
+
+网关 `ManagedModelPublicResponse` 新增 `thinking_levels: []string`（升序档位 id，按「admin 声明 ∩ wire 层真投递」读时派生）。`listModels` / `listModelsWithStatus` 对 `ManagedModel` 本就原样透传（唯一归一化是 `input_modalities` → `inputModalities`），所以本版**只补类型面与文档**，零运行时改动。
+
+### Added
+
+- **`ManagedModel.thinking_levels?: string[]`** —— 该模型可选的思考深度档位 id，取值是 `ThinkingOff` / `ThinkingHigh` / `ThinkingMax`（`'off'` / `'high'` / `'max'`）的子集。字段名保持 wire snake_case，与同结构的 `supported_formats` / `preferred_format` 同风格（见 `src/models/types.ts` 文件头命名约定）。三态语义写进 JSDoc 与 README：`[]` = 该模型没有思考档（不渲染档位选择）；`undefined` = 上游未播报（旧网关），调用方必须按"未知"处理，**严禁**回落到自己推档或按模型名 substring 猜。公开方法签名零移除、零改名，旧调用方逐字节兼容。
+
+### 回归闸门
+
+- `test/list-models-thinking-levels.test.ts` —— `listModels` / `listModelsWithStatus` 在 `thinking_levels: ['off','high','max']`、单档子集、`[]`、字段缺失四种 payload 下的原样可读性；含"`[]` 与 `undefined` 不可互换"的正向对照（防把空数组当缺失处理的读侧漂移），以及"不因新字段而误伤 `inputModalities` 归一化"的共存用例。
+
 ## [2.17.0] - 2026-08-15 — 桌面 loopback OAuth state 全路径闸 + 端口确定性关闭
 
 **回环监听在整个登录期间对本机任意进程开放，state 是唯一的门。** 2.16.0 及更早版本的桌面 loopback `authorize` 不生成也不校验 OAuth `state`（`af2daa0b` 已在源码补上核心校验，但从未发版）；且校验只覆盖"带 code"的回调 —— 携带 OAuth error 的回调**绕过 state 直接把登录结算成"用户已拒绝"**，本机恶意进程不猜任何秘密就能打断/塑形一次等待中的登录；重复 `state` 参数取首值即可蒙混（`?code=攻击者的码&state=<正确值>&state=x` 在旧实现下**成功登录到攻击者会话**）。本版把 state 校验提到 `/callback` 所有形态之前，并收紧为"恰好一个"。
