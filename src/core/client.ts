@@ -380,6 +380,57 @@ function notifyUpstreamActivity(cb: UpstreamActivityCallback | undefined): void 
 }
 
 /**
+ * 网关下发消费请求 ID 的响应头名。
+ *
+ * 值 = cloud-agent 的 `consumeRequestID`, 也就是 `managed_model_usage_logs.request_id`
+ * 的值 —— 消费方拿它可以把一次用户可见的失败直接 join 到上游那次网关调用与它产生的
+ * 计费行。
+ *
+ * **不要**与 `X-Request-ID` 混用: 那是网关的传输层追踪 ID, 独立生成、从不写进任何
+ * 计费表, 两者永不相等。用错的后果是恒空 join —— 不报错, 只是下次事故照样查不动。
+ */
+export const GATEWAY_REQUEST_ID_HEADER = 'X-Acosmi-Request-Id';
+
+/**
+ * 网关消费请求 ID 回调 (2026-09-01)。
+ *
+ * **为什么需要它**: 消费方 (如 CrabCode) 会在流成功、但流内证据不合格时对用户报失败
+ * (2026-08-31 事故形态: 6 次上游搜索全部成功并已计费, 客户端却全部判失败)。这类失败
+ * 此前无法关联到上游那一次调用 —— 客户端与网关之间没有任何共同标识符, 定位只能靠
+ * 时间戳与模型名人工对齐。
+ *
+ * 头在**首字节之前**发出, 因此覆盖流中段中断、零事件、HTTP 错误等全部形态; 而流内
+ * 事件在「事件根本没来」的场景里恰恰不存在 —— 那正是最需要诊断的那一种。
+ *
+ * 回调在响应头到达后触发**至多一次**; 网关没下发 (旧版本 / 非托管路径) 时**一次都不
+ * 触发** —— 绝不合成占位值。回调抛错会被吞掉且不中断流 (旁路信号不该有能力杀死主链路)。
+ */
+export type GatewayRequestIDCallback = (requestID: string) => void;
+
+/** 从响应头读出消费请求 ID; 缺失 / 空白一律 undefined —— 宁可不给, 不可编造。 */
+function readGatewayRequestID(headers: Headers): string | undefined {
+  const raw = headers.get(GATEWAY_REQUEST_ID_HEADER);
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** 触发消费请求 ID 回调; 消费方回调抛错不得污染主链路 (与 notifyUpstreamActivity 同构)。 */
+function notifyGatewayRequestID(
+  cb: GatewayRequestIDCallback | undefined,
+  headers: Headers,
+): void {
+  if (!cb) return;
+  const id = readGatewayRequestID(headers);
+  if (id === undefined) return;
+  try {
+    cb(id);
+  } catch {
+    /* 旁路信号: 消费方的错误不传播回主链路 */
+  }
+}
+
+/**
  * 非流式 JSON API 请求的默认超时 (毫秒)。
  *
  * 子 client (agent-runs / compliance) 的同步 JSON 调用未传 signal 时套用此上限,
@@ -1271,7 +1322,12 @@ export class Client {
    * 响应的 tokenRemaining / callRemaining 字段来自服务端 Header, 反映结算后余额
    * v0.5.0: 根据 provider 自动路由到 /anthropic 或 /chat 端点
    */
-  async chat(modelID: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+  async chat(
+    modelID: string,
+    req: ChatRequest,
+    signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
+  ): Promise<ChatResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req (buildChatRequest 内部 sanitizer 也会改 rawMessages)。
     const r: ChatRequest = { ...req, stream: false };
     // 外层 ctl 界定本方法的总预算 (buildChatRequest 的 ensureModelCached 可能出网,
@@ -1292,6 +1348,9 @@ export class Client {
         ctl.signal,
         CHAT_REQUEST_TIMEOUT_MS,
       );
+
+      // 计费关联 (2026-09-01): 见 GatewayRequestIDCallback。
+      notifyGatewayRequestID(onGatewayRequestID, headers);
 
       const resp = adapter.parseResponse(result);
 
@@ -1450,14 +1509,15 @@ export class Client {
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): Promise<AnthropicResponse> {
     const m = await this.ensureModelCached(modelID, signal);
     const adapter = getAdapterForModel(m);
 
     if (adapter.format() === ProviderFormat.Anthropic) {
-      return this.chatMessagesAnthropic(modelID, req, adapter, signal);
+      return this.chatMessagesAnthropic(modelID, req, adapter, signal, onGatewayRequestID);
     }
-    return this.chatMessagesOpenAI(modelID, req, adapter, signal);
+    return this.chatMessagesOpenAI(modelID, req, adapter, signal, onGatewayRequestID);
   }
 
   private async chatMessagesAnthropic(
@@ -1465,6 +1525,7 @@ export class Client {
     req: ChatRequest,
     adapter: ProviderAdapter,
     signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): Promise<AnthropicResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: false };
@@ -1475,13 +1536,16 @@ export class Client {
       const data = JSON.stringify(body);
 
       // 第 5 实参不可省 — 见 chat() 处说明: 缺它内层恒落回 30s 默认值。
-      const { result } = await this.doJSONFullRaw(
+      const { result, headers } = await this.doJSONFullRaw(
         'POST',
         `/managed-models/${encodeURIComponent(modelID)}/anthropic`,
         data,
         ctl.signal,
         CHAT_REQUEST_TIMEOUT_MS,
       );
+
+      // 计费关联 (2026-09-01): 见 GatewayRequestIDCallback。
+      notifyGatewayRequestID(onGatewayRequestID, headers);
 
       // 尝试 APIResponse 包装: {"code":0,"message":"...","data":{...}}
       const rawStr = new TextDecoder().decode(result);
@@ -1516,6 +1580,7 @@ export class Client {
     req: ChatRequest,
     adapter: ProviderAdapter,
     signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): Promise<AnthropicResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: false };
@@ -1527,13 +1592,16 @@ export class Client {
 
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
       // 第 5 实参不可省 — 见 chat() 处说明: 缺它内层恒落回 30s 默认值。
-      const { result } = await this.doJSONFullRaw(
+      const { result, headers } = await this.doJSONFullRaw(
         'POST',
         endpoint,
         data,
         ctl.signal,
         CHAT_REQUEST_TIMEOUT_MS,
       );
+
+      // 计费关联 (2026-09-01): 见 GatewayRequestIDCallback。
+      notifyGatewayRequestID(onGatewayRequestID, headers);
 
       // 解析 OpenAI 格式响应并转换为 AnthropicResponse
       const { parseOpenAIResponseToAnthropic } = await import('../models/adapters/openai');
@@ -1548,16 +1616,18 @@ export class Client {
    * v0.5.0: 根据 adapter 路由端点
    *
    * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
+   * @param onGatewayRequestID 见 {@link GatewayRequestIDCallback}
    */
   chatStream(
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncIterable<StreamEvent> {
     return {
       [Symbol.asyncIterator]: () =>
-        this.chatStreamGen(modelID, req, signal, false, onUpstreamActivity),
+        this.chatStreamGen(modelID, req, signal, false, onUpstreamActivity, onGatewayRequestID),
     };
   }
 
@@ -1567,16 +1637,18 @@ export class Client {
    * 无 started/settled/failed 自定义事件, 无 data: [DONE], message_stop 为自然结束
    *
    * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
+   * @param onGatewayRequestID 见 {@link GatewayRequestIDCallback}
    */
   chatMessagesStream(
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncIterable<StreamEvent> {
     return {
       [Symbol.asyncIterator]: () =>
-        this.chatMessagesStreamGen(modelID, req, signal, false, onUpstreamActivity),
+        this.chatMessagesStreamGen(modelID, req, signal, false, onUpstreamActivity, onGatewayRequestID),
     };
   }
 
@@ -1586,6 +1658,7 @@ export class Client {
     signal: AbortSignal | undefined,
     retried: boolean,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1625,9 +1698,14 @@ export class Client {
           `stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity);
+      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID);
       return;
     }
+
+    // 计费关联 (2026-09-01): 响应头在首字节之前就已到达, 这里是唯一能在
+    // 「流还没吐任何事件」之前拿到消费请求 ID 的位置。刻意放在 !resp.ok 之前 ——
+    // HTTP 错误同样有关联价值, 且错误体里未必带这个 ID。
+    notifyGatewayRequestID(onGatewayRequestID, resp.headers);
 
     if (!resp.ok) {
       const bodyBytes = await readLimited(resp.body!, maxErrorBodySize);
@@ -1674,6 +1752,7 @@ export class Client {
     signal: AbortSignal | undefined,
     retried: boolean,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1712,9 +1791,14 @@ export class Client {
           `messages stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity);
+      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID);
       return;
     }
+
+    // 计费关联 (2026-09-01): 响应头在首字节之前就已到达, 这里是唯一能在
+    // 「流还没吐任何事件」之前拿到消费请求 ID 的位置。刻意放在 !resp.ok 之前 ——
+    // HTTP 错误同样有关联价值, 且错误体里未必带这个 ID。
+    notifyGatewayRequestID(onGatewayRequestID, resp.headers);
 
     if (!resp.ok) {
       const bodyBytes = await readLimited(resp.body!, maxErrorBodySize);

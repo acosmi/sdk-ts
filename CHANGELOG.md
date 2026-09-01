@@ -5,6 +5,24 @@ All notable changes to `@acosmi/sdk-ts` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - 2026-09-01 — 网关消费请求 ID 透出（跨系统关联）
+
+**客户端的失败与上游的成功之间此前没有任何共同标识符。** 2026-08-31 事故里，GUI 上每次托管 WebSearch 都失败，而同一时刻上游 6 次搜索全部成功、6 条计费行已落库；定位花掉整场审计，因为只能靠时间戳与模型名人工对齐。网关现在把 `consumeRequestID`（即 `managed_model_usage_logs.request_id`，能 join 到计费行的那个键）放进 `X-Acosmi-Request-Id` 响应头，本版把它透出给消费方。全部改动 additive，旧调用点零改动。
+
+### Added
+
+- **`GATEWAY_REQUEST_ID_HEADER`** —— 头名常量（`'X-Acosmi-Request-Id'`）。**不是**网关的传输层 `X-Request-ID`：那一个独立生成、从不写进任何计费表，两者永不相等，混用的后果是恒空 join（不报错，只是下次事故照样查不动）。
+- **`GatewayRequestIDCallback`** 与四个方法的可选回调形参 —— `chatMessagesStream` / `chatStream` 第 5 形参、`chatMessages` / `chat` 第 4 形参。与既有 `onUpstreamActivity` 完全同构：旁路信号、至多触发一次、消费方回调抛错被吞掉且不中断主链路。
+- 流式路径在**首字节之前**触发，因此覆盖「流中段中断」「上游 200 但零事件」「HTTP 错误」全部形态 —— 而流内事件在「事件根本没来」的场景里恰恰不存在，那正是最需要诊断的那一种。HTTP 错误响应上同样触发（错误体未必带这个 ID）。
+
+### 兼容性
+
+旧网关 + 新 SDK：回调**一次都不触发**，流照常出（fail-open）。缺失或空白的头一律按"没下发"处理，**绝不合成占位值**。
+
+### 回归闸门
+
+- `test/gateway-request-id.test.ts` —— 11 例。正向对照两条：网关不下发时回调零触发（防"没头就编一个"）、ID 必须在第一个事件之前到手（防退化成从流内事件取值）。另含空白头、回调抛错、HTTP 错误、不传回调时逐字兼容，以及头名与网关侧常量逐字一致、且不等于 `x-request-id` 的契约断言。
+
 ## [2.18.0] - 2026-08-29 — `ManagedModel.thinking_levels` 类型面对齐
 
 网关 `ManagedModelPublicResponse` 新增 `thinking_levels: []string`（升序档位 id，按「admin 声明 ∩ wire 层真投递」读时派生）。`listModels` / `listModelsWithStatus` 对 `ManagedModel` 本就原样透传（唯一归一化是 `input_modalities` → `inputModalities`），所以本版**只补类型面与文档**，零运行时改动。
