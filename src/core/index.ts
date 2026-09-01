@@ -8,6 +8,7 @@ export {
   Client,
   DEFAULT_API_TIMEOUT_MS,
   DEFAULT_GATEWAY_BASE_URL,
+  GATEWAY_REQUEST_ID_HEADER,
   ErrOAuthCORSBlocked,
   ErrRefreshProxyFailed,
   ErrTokenExpired,
@@ -17,6 +18,7 @@ export {
   type Config,
   type FilterStatus,
   type ReqTimeoutCtl,
+  type GatewayRequestIDCallback,
   type UpstreamActivityCallback,
 } from './client';
 export {
