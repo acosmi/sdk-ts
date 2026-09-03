@@ -417,9 +417,84 @@ export class OpenAIStreamConverter {
    *  可能已被 text/tool 推进的 this.blockIndex (否则 content_block_stop 索引错配)。 */
   private thinkingBlockIndex = 0;
   private textStarted = false;
-  /** OpenAI tool_call index → Anthropic block index */
-  private toolBlockIndex = new Map<number, number>();
+  /** OpenAI tool_call 键 → Anthropic block index。键正常是 `tc.index`；上游省略
+   *  index 时退化为 `id:<tool_call_id>`，两者都没有时沿用上一个键（见
+   *  {@link resolveToolKey}）。 */
+  private toolBlockIndex = new Map<string | number, number>();
   private blockIndex = 0;
+  /** 每个 tool block 已发出的 `partial_json` 累积，用于识别「每片重发全量参数」
+   *  的上游（见 tool_calls 分支的累计判别）。 */
+  private toolArgsAccum = new Map<string | number, string>();
+  /** 上一次解析出的 tool 键，供缺 index 且缺 id 的后续增量沿用。 */
+  private lastToolKey: string | number | null = null;
+  /** 已发出 message_delta/message_stop，避免 finish_reason 与 `[DONE]` 各收一次。 */
+  private messageClosed = false;
+
+  /**
+   * 解析一条 tool_call delta 归属的块键。
+   *
+   * OpenAI 流式规范里 `index` 是必填，但兼容实现常有省略。此前这里直接用
+   * `tc.index` 做 Map 键：两个都省略 index 的 tool_call 会共用键 `undefined`，
+   * 于是只开一个块、两段参数拼进同一条 `partial_json` 流，产出 `{…}{…}` 这种
+   * 必然非法的 JSON。这里按「index → id → 沿用上一个」三级降级，让至少一种
+   * 稳定标识生效。
+   */
+  private resolveToolKey(tc: { index?: number; id?: string }): string | number {
+    if (typeof tc.index === 'number' && Number.isFinite(tc.index)) {
+      this.lastToolKey = tc.index;
+      return tc.index;
+    }
+    if (typeof tc.id === 'string' && tc.id !== '') {
+      const key = `id:${tc.id}`;
+      this.lastToolKey = key;
+      return key;
+    }
+    if (this.lastToolKey !== null) return this.lastToolKey;
+    this.lastToolKey = 0;
+    return 0;
+  }
+
+  /**
+   * 关闭仍打开的 text / thinking / tool 块，并收口 message。
+   *
+   * 由 `finish_reason` 分支与 `[DONE]` 分支共用：上游断流或只发 `[DONE]` 而不发
+   * `finish_reason` 时，此前一个 `content_block_stop` 都不会发，下游拿到的是一个
+   * 永不闭合的 tool_use 块。
+   */
+  private closeOpenBlocks(events: StreamEvent[], stopReason: string): void {
+    if (this.messageClosed) return;
+    this.messageClosed = true;
+
+    if (this.textStarted) {
+      events.push({
+        event: 'content_block_stop',
+        data: JSON.stringify({ type: 'content_block_stop', index: this.blockIndex }),
+      });
+      this.textStarted = false;
+    } else if (this.thinkingStarted && !this.thinkingStopped) {
+      // 用 thinkingBlockIndex 关 — thinking-only 流末尾若有 tool block 推进过
+      // blockIndex, 这里仍要用 thinking 自己打开时记下的 index, 否则错配。
+      this.thinkingStopped = true;
+      events.push({
+        event: 'content_block_stop',
+        data: JSON.stringify({ type: 'content_block_stop', index: this.thinkingBlockIndex }),
+      });
+    }
+    for (const idx of this.toolBlockIndex.values()) {
+      events.push({
+        event: 'content_block_stop',
+        data: JSON.stringify({ type: 'content_block_stop', index: idx }),
+      });
+    }
+    events.push({
+      event: 'message_delta',
+      data: JSON.stringify({ type: 'message_delta', delta: { stop_reason: stopReason } }),
+    });
+    events.push({
+      event: 'message_stop',
+      data: JSON.stringify({ type: 'message_stop' }),
+    });
+  }
 
   /**
    * 将一行 OpenAI SSE data 转换为零或多个 Anthropic 格式 StreamEvent
@@ -427,7 +502,13 @@ export class OpenAIStreamConverter {
    */
   convert(data: string): { events: StreamEvent[]; done: boolean } {
     if (data === '[DONE]') {
-      return { events: [], done: true };
+      // 上游可能在 `[DONE]` 之前不发 finish_reason（部分兼容实现、以及被中断的
+      // 流）。此前这里直接返回空事件，已打开的块永不闭合，下游只能靠超时收场。
+      const events: StreamEvent[] = [];
+      if (this.messageStarted) {
+        this.closeOpenBlocks(events, 'end_turn');
+      }
+      return { events, done: true };
     }
 
     let chunk: OpenAIStreamChunk;
@@ -510,7 +591,12 @@ export class OpenAIStreamConverter {
 
     // tool_calls delta
     for (const tc of choice.delta.tool_calls ?? []) {
-      if (!this.toolBlockIndex.has(tc.index)) {
+      // 上游给的 tool_call 未必带 `function`：OpenAI 流式规范允许后续增量只带
+      // `{index}`。此前这里直接读 `tc.function.name` / `tc.function.arguments`，
+      // 那种上游会抛 TypeError 撕开整条 for-await 链，整个回合失败。
+      const fn = tc.function as { name?: string; arguments?: unknown } | undefined;
+      const toolKey = this.resolveToolKey(tc);
+      if (!this.toolBlockIndex.has(toolKey)) {
         // 关闭仍打开的 thinking block (镜像 text 分支): chunk 顺序 reasoning_content →
         // tool_calls (中间无 content text delta) 时, thinking 仍开着且 blockIndex 未推进,
         // 若不在此关闭并递增, tool block 会与 thinking 撞 index 0。用 thinkingBlockIndex 关。
@@ -533,64 +619,61 @@ export class OpenAIStreamConverter {
           this.blockIndex++;
           this.textStarted = false;
         }
-        this.toolBlockIndex.set(tc.index, this.blockIndex);
+        this.toolBlockIndex.set(toolKey, this.blockIndex);
         const blockJSON = JSON.stringify({
           type: 'content_block_start',
           index: this.blockIndex,
           content_block: {
             type: 'tool_use',
             id: tc.id,
-            name: tc.function.name,
+            name: fn?.name,
             input: {},
           },
         });
         events.push({ event: 'content_block_start', data: blockJSON });
         this.blockIndex++; // 递增, 为下一个 tool_call block 预留索引
       }
-      if (tc.function.arguments && tc.function.arguments !== '') {
-        const idx = this.toolBlockIndex.get(tc.index)!;
-        const deltaJSON = JSON.stringify({
-          type: 'content_block_delta',
-          index: idx,
-          delta: {
-            type: 'input_json_delta',
-            partial_json: tc.function.arguments,
-          },
-        });
-        events.push({ event: 'content_block_delta', data: deltaJSON });
+      if (fn?.arguments !== undefined && fn.arguments !== null && fn.arguments !== '') {
+        // `arguments` 按 OpenAI 规范是 string，但部分兼容实现直接给对象。此前原样
+        // 塞进 `partial_json`，下游 `input += delta.partial_json` 会拼出
+        // "[object Object]"。这里统一成字符串，语义不变。
+        const rawArgs =
+          typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments);
+
+        // 累计 vs 增量判别：部分上游每个 chunk 重发**全量**参数而非增量。此前无条件
+        // 累加，会拼出 `{"a":1}{"a":1}{"a":1}` 这种必然非法的 JSON。判据取最保守的
+        // 一种：新片严格以已累积内容为前缀**且**更长时，才认为上游在重发全量，只发
+        // 差值。真增量流里某一片恰好等于「此前全部内容的延长」概率可忽略。
+        const accum = this.toolArgsAccum.get(toolKey) ?? '';
+        let emit = rawArgs;
+        if (accum !== '' && rawArgs.length > accum.length && rawArgs.startsWith(accum)) {
+          emit = rawArgs.slice(accum.length);
+          this.toolArgsAccum.set(toolKey, rawArgs);
+        } else {
+          this.toolArgsAccum.set(toolKey, accum + rawArgs);
+        }
+
+        if (emit !== '') {
+          const idx = this.toolBlockIndex.get(toolKey)!;
+          const deltaJSON = JSON.stringify({
+            type: 'content_block_delta',
+            index: idx,
+            delta: {
+              type: 'input_json_delta',
+              partial_json: emit,
+            },
+          });
+          events.push({ event: 'content_block_delta', data: deltaJSON });
+        }
       }
     }
 
     // finish_reason: 关闭所有 block + message_delta + message_stop
     if (choice.finish_reason != null && choice.finish_reason !== '') {
-      // 关闭可能仍打开的 block
-      if (this.textStarted) {
-        const stopJSON = JSON.stringify({
-          type: 'content_block_stop',
-          index: this.blockIndex,
-        });
-        events.push({ event: 'content_block_stop', data: stopJSON });
-      } else if (this.thinkingStarted && !this.thinkingStopped) {
-        // 用 thinkingBlockIndex 关 — thinking-only 流末尾若有 tool block 推进过 blockIndex,
-        // 这里仍要用 thinking 自己打开时记下的 index, 否则错配。
-        this.thinkingStopped = true;
-        const stopJSON = JSON.stringify({
-          type: 'content_block_stop',
-          index: this.thinkingBlockIndex,
-        });
-        events.push({ event: 'content_block_stop', data: stopJSON });
-      }
-      // 关闭 tool blocks
-      for (const idx of this.toolBlockIndex.values()) {
-        const stopJSON = JSON.stringify({
-          type: 'content_block_stop',
-          index: idx,
-        });
-        events.push({ event: 'content_block_stop', data: stopJSON });
-      }
-
-      // stop_reason 映射
-      let stopReason = 'end_turn';
+      // stop_reason 映射。`content_filter` 等未列出的值刻意保持原样透传而不是压成
+      // `end_turn` —— 把内容审查拦截伪装成正常结束会让下游无从分辨。同文件的
+      // `convertOpenAIToChatResponse` 一直是原样透传，这里跟它对齐。
+      let stopReason: string;
       switch (choice.finish_reason) {
         case 'tool_calls':
           stopReason = 'tool_use';
@@ -598,16 +681,13 @@ export class OpenAIStreamConverter {
         case 'length':
           stopReason = 'max_tokens';
           break;
+        case 'stop':
+          stopReason = 'end_turn';
+          break;
+        default:
+          stopReason = choice.finish_reason;
       }
-
-      const deltaJSON = JSON.stringify({
-        type: 'message_delta',
-        delta: { stop_reason: stopReason },
-      });
-      events.push({ event: 'message_delta', data: deltaJSON });
-
-      const stopJSON = JSON.stringify({ type: 'message_stop' });
-      events.push({ event: 'message_stop', data: stopJSON });
+      this.closeOpenBlocks(events, stopReason);
     }
 
     return { events, done: false };

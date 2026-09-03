@@ -133,7 +133,9 @@ describe('OpenAIStreamConverter — thinking → tool_calls (无 content) 不撞
     expect(thinkingIdx[0]).not.toBe(toolIdx[0]);
 
     // thinking block 必须被关闭 (有 stop@0)
-    const stops = events.filter((e) => e.event === 'content_block_stop').map((e) => e.payload.index);
+    const stops = events
+      .filter((e) => e.event === 'content_block_stop')
+      .map((e) => e.payload.index);
     expect(stops).toContain(0); // thinking stop
     expect(stops).toContain(1); // tool stop
 
@@ -180,5 +182,150 @@ describe('OpenAIStreamConverter — 回归: 其它顺序仍正确配对', () => 
     const { startIndexByType } = assertBlocksWellFormed(events);
     expect(startIndexByType.get('thinking')).toEqual([0]);
     expect(startIndexByType.get('tool_use')).toEqual([1, 2]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [tool-json-guards-2026-09-03] 五处「上游不守规范 → 拼出非法 JSON」的守卫。
+//
+// 背景: 2026-09-03 一次 AskUserQuestion 参数不可解析的事故审计中，逐项过了这个
+// 转换器在上游行为不规范时的产出。事故本身走的是 Anthropic 原生路径（不经过这里），
+// 但同一批检查在这条路径上查出五处会产出非法 JSON 或撕断迭代链的形态。
+//
+// 每条都配「守卫生效」+「常规形态未被改变」两侧断言。
+// ---------------------------------------------------------------------------
+
+/** 收集某个 block index 上按序拼出的 partial_json。 */
+function joinToolInput(events: ParsedEvent[], index: number): string {
+  return events
+    .filter(
+      (e) =>
+        e.event === 'content_block_delta' &&
+        (e.payload.index as number) === index &&
+        (e.payload.delta as { type: string }).type === 'input_json_delta',
+    )
+    .map((e) => (e.payload.delta as { partial_json: string }).partial_json)
+    .join('');
+}
+
+describe('OpenAIStreamConverter — 上游不规范时不产出非法 JSON', () => {
+  it('省略 index 的两个 tool_call 不共用一个块（否则参数拼成 {…}{…}）', () => {
+    const chunk = (id: string, name: string, args: string) =>
+      JSON.stringify({
+        id: 'c1',
+        choices: [{ delta: { tool_calls: [{ id, function: { name, arguments: args } }] } }],
+      });
+    const events = runChunks([
+      chunk('call_a', 'alpha', '{"a":1}'),
+      chunk('call_b', 'beta', '{"b":2}'),
+      finishChunk('tool_calls'),
+    ]);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    const idx = startIndexByType.get('tool_use') ?? [];
+    expect(idx).toHaveLength(2);
+    // 两段参数各自落在自己的块里，各自都是合法 JSON
+    expect(JSON.parse(joinToolInput(events, idx[0]!))).toEqual({ a: 1 });
+    expect(JSON.parse(joinToolInput(events, idx[1]!))).toEqual({ b: 2 });
+  });
+
+  it('每片重发全量参数的上游只累出一份（否则拼成 {…}{…}{…}）', () => {
+    const events = runChunks([
+      toolCallChunk(0, 'call_1', 'f', '{"city"'),
+      toolCallChunk(0, 'call_1', 'f', '{"city":"sf"'),
+      toolCallChunk(0, 'call_1', 'f', '{"city":"sf"}'),
+      finishChunk('tool_calls'),
+    ]);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    const idx = (startIndexByType.get('tool_use') ?? [])[0]!;
+    expect(JSON.parse(joinToolInput(events, idx))).toEqual({ city: 'sf' });
+  });
+
+  it('正向对照: 真增量流仍按原样逐片透传', () => {
+    const events = runChunks([
+      toolCallChunk(0, 'call_1', 'f', '{"city":'),
+      toolCallChunk(0, 'call_1', 'f', '"sf"}'),
+      finishChunk('tool_calls'),
+    ]);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    const idx = (startIndexByType.get('tool_use') ?? [])[0]!;
+    expect(joinToolInput(events, idx)).toBe('{"city":"sf"}');
+  });
+
+  it('arguments 是对象而非字符串时不拼出 [object Object]', () => {
+    const chunk = JSON.stringify({
+      id: 'c1',
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id: 'call_1', function: { name: 'f', arguments: { city: 'sf' } } },
+            ],
+          },
+        },
+      ],
+    });
+    const events = runChunks([chunk, finishChunk('tool_calls')]);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    const idx = (startIndexByType.get('tool_use') ?? [])[0]!;
+    const joined = joinToolInput(events, idx);
+    expect(joined).not.toContain('[object Object]');
+    expect(JSON.parse(joined)).toEqual({ city: 'sf' });
+  });
+
+  it('后续增量只带 {index} 而无 function 时不抛错', () => {
+    const bare = JSON.stringify({
+      id: 'c1',
+      choices: [{ delta: { tool_calls: [{ index: 0 }] } }],
+    });
+    expect(() =>
+      runChunks([toolCallChunk(0, 'call_1', 'f', '{"a":1}'), bare, finishChunk('tool_calls')]),
+    ).not.toThrow();
+  });
+
+  it('上游只发 [DONE] 而无 finish_reason 时仍收口所有块', () => {
+    const conv = newOpenAIStreamConverter();
+    const all: StreamEvent[] = [];
+    for (const c of [toolCallChunk(0, 'call_1', 'f', '{"a":1}')]) {
+      all.push(...conv.convert(c).events);
+    }
+    const { events, done } = conv.convert('[DONE]');
+    all.push(...events);
+    expect(done).toBe(true);
+    const parsed = all.map((e) => ({
+      event: e.event,
+      payload: JSON.parse(e.data) as Record<string, unknown>,
+    }));
+    assertBlocksWellFormed(parsed);
+    expect(parsed.some((e) => e.event === 'message_delta')).toBe(true);
+    expect(parsed.some((e) => e.event === 'message_stop')).toBe(true);
+  });
+
+  it('正向对照: 收到 finish_reason 后再来 [DONE] 不重复收口', () => {
+    const conv = newOpenAIStreamConverter();
+    const all: StreamEvent[] = [];
+    for (const c of [toolCallChunk(0, 'call_1', 'f', '{"a":1}'), finishChunk('tool_calls')]) {
+      all.push(...conv.convert(c).events);
+    }
+    all.push(...conv.convert('[DONE]').events);
+    const stops = all.filter((e) => e.event === 'message_stop');
+    expect(stops).toHaveLength(1);
+  });
+
+  it('content_filter 不被压成 end_turn', () => {
+    const events = runChunks([textChunk('hi'), finishChunk('content_filter')]);
+    const delta = events.find((e) => e.event === 'message_delta');
+    expect((delta!.payload.delta as { stop_reason: string }).stop_reason).toBe('content_filter');
+  });
+
+  it('正向对照: 已映射的 finish_reason 保持既有语义', () => {
+    for (const [reason, expected] of [
+      ['stop', 'end_turn'],
+      ['length', 'max_tokens'],
+      ['tool_calls', 'tool_use'],
+    ] as const) {
+      const events = runChunks([textChunk('hi'), finishChunk(reason)]);
+      const delta = events.find((e) => e.event === 'message_delta');
+      expect((delta!.payload.delta as { stop_reason: string }).stop_reason).toBe(expected);
+    }
   });
 });
