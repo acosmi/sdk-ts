@@ -275,6 +275,7 @@ export function resolveThinkingLevel(
   if (caps.supports_effort) {
     let effortLevel = 'high';
     if (level === 'low') effortLevel = 'low';
+    if (level === 'medium' || level === 'xhigh') effortLevel = level;
     if (level === ThinkingMax && caps.supports_max_effort) {
       effortLevel = 'max';
     }

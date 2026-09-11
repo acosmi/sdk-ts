@@ -77,6 +77,9 @@ export class OpenAIAdapter implements ProviderAdapter {
     if (eff !== '') {
       body['reasoning_effort'] = eff;
     }
+    if (_caps.supports_thinking && req.thinking?.level === ThinkingOff) {
+      body['thinking'] = { type: 'disabled' };
+    }
 
     if (req.speed && req.speed !== '') {
       body['speed'] = req.speed;
@@ -186,6 +189,7 @@ export function resolveOpenAIReasoningEffort(req: ChatRequest, supportsMax = fal
       case 'low':
       case 'medium':
       case 'high':
+      case 'xhigh':
         return req.effort.level;
       case 'max':
         // OpenAI 无 max 级别, 等价最深 = high
@@ -196,7 +200,9 @@ export function resolveOpenAIReasoningEffort(req: ChatRequest, supportsMax = fal
   if (req.thinking) {
     switch (req.thinking.level) {
       case 'low':
-        return 'low';
+      case 'medium':
+      case 'xhigh':
+        return req.thinking.level;
       case ThinkingHigh:
         return 'high';
       case ThinkingMax:
