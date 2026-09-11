@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Client,
+  InMemoryTokenStore,
   discover,
   exchangeCode,
   refreshToken,
@@ -116,7 +117,7 @@ describe('Client.forceRefresh 全链路走注入 fetchImpl', () => {
       throw new Error(`unexpected url ${u}`);
     }) as unknown as typeof fetch;
 
-    const client = new Client({ serverURL: 'https://nexus.test', fetchImpl: mock });
+    const client = new Client({ serverURL: 'https://nexus.test', fetchImpl: mock, store: new InMemoryTokenStore() });
     client.tokens = {
       access_token: 'old-AT',
       refresh_token: 'old-RT',

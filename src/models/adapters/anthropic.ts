@@ -274,6 +274,7 @@ export function resolveThinkingLevel(
   // 仅支持 effort 的模型发送此参数
   if (caps.supports_effort) {
     let effortLevel = 'high';
+    if (level === 'low') effortLevel = 'low';
     if (level === ThinkingMax && caps.supports_max_effort) {
       effortLevel = 'max';
     }

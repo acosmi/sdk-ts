@@ -493,6 +493,7 @@ export interface ChatUsage {
 
 /** 三档思考级别 (v0.9.0) */
 export const ThinkingOff = 'off';
+export const ThinkingLow = 'low';
 export const ThinkingHigh = 'high';
 export const ThinkingMax = 'max';
 
