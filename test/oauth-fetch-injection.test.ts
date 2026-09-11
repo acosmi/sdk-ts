@@ -1,8 +1,8 @@
+import { InMemoryTokenStore } from '../src/core/store';
 // C2 (P2-2): OAuth 链路使用注入的 fetchImpl, 不落全局 fetch。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Client,
-  InMemoryTokenStore,
   discover,
   exchangeCode,
   refreshToken,

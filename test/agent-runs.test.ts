@@ -155,7 +155,7 @@ describe('agentRuns', () => {
     const getCalls: string[] = [];
     const getClient = clientWithFetch(async (url) => {
       getCalls.push(String(url));
-      if (getCalls.length === 1) return jsonResponse({ error: { message: 'expired' } }, 401);
+      if (getCalls.length === 1) return jsonResponse({ error: { message: 'expired' }, errorContractVersion: 1, faultDomain: 'user_auth', errorCode: 'USER_ACCESS_TOKEN_INVALID', transportRequestId: null, consumeRequestId: null, providerRequestId: null, requestDisposition: 'not_accepted', retryable: false }, 401);
       return jsonResponse({
         code: 0,
         message: 'success',

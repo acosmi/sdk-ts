@@ -94,6 +94,13 @@ export class HTTPError extends Error {
    * false/缺失 = 周窗/显式禁止/灰度关 (硬等待, 无豁免路径, 老网关不返回时为 undefined)。
    */
   windowOverridable?: boolean;
+  errorContractVersion?: number;
+  faultDomain?: FaultDomain;
+  requestDisposition?: RequestDisposition;
+  transportRequestId?: string | null;
+  consumeRequestId?: string | null;
+  providerRequestId?: string | null;
+  retryable: boolean;
 
   constructor(
     statusCode: number,
@@ -106,6 +113,13 @@ export class HTTPError extends Error {
       windowKind?: 'FIVE_HOUR' | 'WEEKLY';
       windowResetAt?: string;
       windowOverridable?: boolean;
+      errorContractVersion?: number;
+      faultDomain?: FaultDomain;
+      requestDisposition?: RequestDisposition;
+      transportRequestId?: string | null;
+      consumeRequestId?: string | null;
+      providerRequestId?: string | null;
+      retryable?: boolean;
     } = {},
   ) {
     let msg: string;
@@ -128,6 +142,13 @@ export class HTTPError extends Error {
     this.windowKind = opts.windowKind;
     this.windowResetAt = opts.windowResetAt;
     this.windowOverridable = opts.windowOverridable;
+    this.errorContractVersion = opts.errorContractVersion;
+    this.faultDomain = opts.faultDomain;
+    this.requestDisposition = opts.requestDisposition;
+    this.transportRequestId = opts.transportRequestId;
+    this.consumeRequestId = opts.consumeRequestId;
+    this.providerRequestId = opts.providerRequestId;
+    this.retryable = opts.retryable === true && opts.requestDisposition === 'not_accepted';
   }
 }
 
@@ -145,6 +166,7 @@ export class NetworkError extends Error {
   override cause?: unknown;
   timeout: boolean;
   eof: boolean;
+  requestDisposition: RequestDisposition = 'unknown';
 
   constructor(op: string, url: string, cause: unknown, opts: { timeout?: boolean; eof?: boolean } = {}) {
     const causeMsg = cause instanceof Error ? cause.message : cause != null ? String(cause) : 'network error';
@@ -175,6 +197,8 @@ export class NetworkError extends Error {
 export class StreamError extends Error {
   /** 例: "empty_response" / "rate_limit" / "overloaded" / "" */
   code: string;
+  /** D23 gateway machine code; mirrors the legacy `code` field. */
+  errorCode: string;
   /** 例: "provider" / "settlement" */
   stage: string;
   /** 用户友好提示 (中文); 历史字段, 与 rawError 区分 */
@@ -183,24 +207,102 @@ export class StreamError extends Error {
   rawError: string;
   /** 客户端是否值得重试 */
   retryable: boolean;
+  errorContractVersion?: number;
+  faultDomain?: FaultDomain;
+  requestDisposition?: RequestDisposition;
+  transportRequestId?: string | null;
+  consumeRequestId?: string | null;
+  providerRequestId?: string | null;
 
-  constructor(opts: { code?: string; stage?: string; message?: string; rawError?: string; retryable?: boolean } = {}) {
+  constructor(opts: { code?: string; stage?: string; message?: string; rawError?: string; retryable?: boolean; errorContractVersion?: number; faultDomain?: FaultDomain; requestDisposition?: RequestDisposition; transportRequestId?: string | null; consumeRequestId?: string | null; providerRequestId?: string | null } = {}) {
     const code = opts.code ?? '';
     const stage = opts.stage ?? '';
     const userMessage = opts.message ?? '';
     const rawError = opts.rawError ?? '';
-    const retryable = opts.retryable ?? false;
+    const retryable = opts.retryable === true && opts.requestDisposition === 'not_accepted';
 
     const body = rawError !== '' ? rawError : userMessage;
     const msg = stage !== '' ? `stream failed: ${stage}: ${body}` : `stream failed: ${body}`;
     super(msg);
     this.name = 'StreamError';
     this.code = code;
+    this.errorCode = code;
     this.stage = stage;
     this.userMessage = userMessage;
     this.rawError = rawError;
     this.retryable = retryable;
+    this.errorContractVersion = opts.errorContractVersion;
+    this.faultDomain = opts.faultDomain;
+    this.requestDisposition = opts.requestDisposition;
+    this.transportRequestId = opts.transportRequestId;
+    this.consumeRequestId = opts.consumeRequestId;
+    this.providerRequestId = opts.providerRequestId;
   }
+}
+
+export type RequestDisposition = 'not_accepted' | 'accepted' | 'unknown';
+export type FaultDomain = 'user_auth' | 'caller_credentials' | 'account_quota' |
+  'account_permission' | 'provider' | 'gateway' | 'transport' | 'stream_ticket' | 'protocol';
+
+export interface GatewayErrorContract {
+  errorContractVersion: 1;
+  faultDomain: FaultDomain;
+  errorCode: string;
+  transportRequestId: string | null;
+  consumeRequestId: string | null;
+  providerRequestId: string | null;
+  requestDisposition: RequestDisposition;
+  retryable: boolean;
+}
+
+const gatewayFaultDomains: readonly FaultDomain[] = [
+  'user_auth', 'caller_credentials', 'account_quota', 'account_permission',
+  'provider', 'gateway', 'transport', 'stream_ticket', 'protocol',
+];
+
+function nullableID(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function decodeGatewayErrorContract(value: unknown): GatewayErrorContract | null {
+  if (value == null || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  const version = v.errorContractVersion;
+  const domain = v.faultDomain;
+  const disposition = v.requestDisposition;
+  const errorCode = v.errorCode;
+  if (version !== 1 || typeof domain !== 'string' || !gatewayFaultDomains.includes(domain as FaultDomain)) return null;
+  if (typeof errorCode !== 'string' || errorCode.length === 0) return null;
+  if (disposition !== 'not_accepted' && disposition !== 'accepted' && disposition !== 'unknown') return null;
+  if (!nullableID(v.transportRequestId) || !nullableID(v.consumeRequestId) || !nullableID(v.providerRequestId)) return null;
+  if (typeof v.retryable !== 'boolean') return null;
+  return { errorContractVersion: 1, faultDomain: domain as FaultDomain, errorCode,
+    transportRequestId: v.transportRequestId, consumeRequestId: v.consumeRequestId,
+    providerRequestId: v.providerRequestId, requestDisposition: disposition, retryable: v.retryable };
+}
+
+/** Read the closed v1 gateway error contract without exposing the raw response body. */
+export function readGatewayErrorContract(error: unknown): GatewayErrorContract | null {
+  const direct = decodeGatewayErrorContract(error);
+  if (direct) return direct;
+  if (error == null || typeof error !== 'object') return null;
+  const e = error as { response?: { data?: unknown }; body?: unknown };
+  const axios = decodeGatewayErrorContract(e.response?.data);
+  if (axios) return axios;
+  if (typeof e.body === 'string') {
+    try { return decodeGatewayErrorContract(JSON.parse(e.body)); } catch { return null; }
+  }
+  return null;
+}
+
+/** True only for an HTTP 401 carrying the exact v1 rejected user-token contract. */
+export function isUserAccessTokenRejected(error: unknown): boolean {
+  if (error == null || typeof error !== 'object') return false;
+  const e = error as { statusCode?: unknown; response?: { status?: unknown } };
+  const status = e.statusCode ?? e.response?.status;
+  const contract = readGatewayErrorContract(error);
+  return status === 401 && contract?.faultDomain === 'user_auth' &&
+    contract.errorCode === 'USER_ACCESS_TOKEN_INVALID' && contract.requestDisposition === 'not_accepted';
 }
 
 // =============================================================================

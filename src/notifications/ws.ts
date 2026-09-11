@@ -8,6 +8,8 @@
 import type { APIResponse } from '../shared/api-response';
 import type { WSEvent } from './types';
 import { Client } from '../core/client';
+import { maxErrorBodySize, parseHTTPErrorWithHeader, readLimited } from '../core/http';
+import type { CredentialSnapshot } from '../core/store';
 
 /** WebSocket 长连接配置 */
 export interface WSConfig {
@@ -34,7 +36,10 @@ interface WSStateImpl {
   done: Promise<void>;
   doneResolve: () => void;
   connected: boolean;
+  owner: WSOwner | null;
 }
+
+type WSOwner = Pick<CredentialSnapshot, 'storeInstanceId' | 'authSessionId' | 'principal'>;
 
 declare module '@acosmi/sdk-ts' {
   interface Client {
@@ -55,9 +60,7 @@ Client.prototype.connect = async function (this: Client, cfg: WSConfig, signal?:
   // 幂等化重复 connect: 已有连接/重连 loop 时先优雅断开旧的, 否则旧 wsLoop 的后台
   // 自动重连定时器会和新连接并存 → 多个 WebSocket + 多个 setTimeout loop 泄漏 (FD + 内存)。
   // disconnect() 会 abort 旧 ws、关旧 conn、并等待旧读循环退出 (最多 5s)。
-  if (this.ws) {
-    await this.disconnect();
-  }
+  const oldDisconnect = this.ws ? this.disconnect() : Promise.resolve();
 
   const noop = () => {};
   const filledCfg: Required<WSConfig> = {
@@ -88,11 +91,22 @@ Client.prototype.connect = async function (this: Client, cfg: WSConfig, signal?:
     done,
     doneResolve: resolveDone,
     connected: false,
+    owner: null,
   };
 
-  // 首次连接 — 失败抛出
-  await wsConnectOnce(this, ws);
+  // Register before the first await so disconnect/replacement can cancel a
+  // ticket request or handshake that has not produced a socket yet.
   this.ws = ws as unknown as Client['ws'];
+  try {
+    await oldDisconnect;
+    await assertCurrent(this, ws);
+    await wsConnectOnce(this, ws);
+  } catch (error) {
+    ws.abort.abort();
+    if (this.ws === ws as unknown as Client['ws']) this.ws = null;
+    ws.doneResolve();
+    throw error;
+  }
 
   // 后台读循环 + 自动重连
   void wsLoop(this, ws);
@@ -146,7 +160,34 @@ function getWebSocketCtor(): typeof WebSocket {
   return WSCtor;
 }
 
+function sameOwner(a: WSOwner | null, b: WSOwner | null): boolean {
+  return a?.storeInstanceId === b?.storeInstanceId &&
+    a?.authSessionId === b?.authSessionId &&
+    a?.principal?.issuer === b?.principal?.issuer &&
+    a?.principal?.subject === b?.principal?.subject &&
+    a?.principal?.organizationId === b?.principal?.organizationId;
+}
+
+async function readOwner(c: Client, signal: AbortSignal): Promise<WSOwner | null> {
+  if (c.credentialMode !== 'versioned') return null;
+  const snapshot = await c.getCredentialSnapshot(signal);
+  return { storeInstanceId: snapshot.storeInstanceId, authSessionId: snapshot.authSessionId,
+    principal: snapshot.principal };
+}
+
+async function assertCurrent(c: Client, ws: WSStateImpl): Promise<void> {
+  if (ws.abort.signal.aborted || c.ws !== ws as unknown as Client['ws']) throw new Error('websocket connection superseded');
+  if (ws.owner !== null && !sameOwner(ws.owner, await readOwner(c, ws.abort.signal))) {
+    ws.abort.abort();
+    throw new Error('websocket credential owner changed');
+  }
+}
+
 async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
+  const observedOwner = await readOwner(c, ws.abort.signal);
+  if (ws.owner === null) ws.owner = observedOwner;
+  else if (!sameOwner(ws.owner, observedOwner)) throw new Error('websocket credential owner changed');
+  await assertCurrent(c, ws);
   const url = wsURL(c);
   const WSCtor = getWebSocketCtor();
 
@@ -159,12 +200,18 @@ async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
   // 现改为: 每次 (重)连接前用已鉴权客户端 POST /ws/stream-ticket 换一张短时
   // 一次性 ticket (~30-60s TTL, 单次使用), 放入 ?ticket= query。ticket 即便落日志
   // 也已失效, 不泄露长效凭证。重连必须重新铸新 ticket (旧 ticket 已被消费/过期)。
-  const ticketResp = await c.doJSON<APIResponse<{ ticket: string; expiresIn: number }>>(
-    'POST',
-    '/ws/stream-ticket',
-    null,
-    ws.abort.signal,
-  );
+  const token = await c.ensureToken(ws.abort.signal);
+  await assertCurrent(c, ws);
+  const ticketURL = c.apiURL('/ws/stream-ticket');
+  await assertCurrent(c, ws);
+  const ticketHTTP = await c.doRequest({ method: 'POST', url: ticketURL,
+    headers: { Authorization: `Bearer ${token}` } }, ws.abort.signal);
+  if (!ticketHTTP.ok) {
+    const body = ticketHTTP.body ? await readLimited(ticketHTTP.body, maxErrorBodySize) : new Uint8Array();
+    throw parseHTTPErrorWithHeader(ticketHTTP.status, body, ticketHTTP.headers);
+  }
+  const ticketResp = await ticketHTTP.json() as APIResponse<{ ticket: string; expiresIn: number }>;
+  await assertCurrent(c, ws);
   const ticket = ticketResp.data.ticket;
 
   const u = new URL(url);
@@ -190,13 +237,24 @@ async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
         reject(new Error('dial: handshake timeout'));
       }
     }, 30_000);
+    const abortHandshake = () => {
+      clearTimeout(handshakeTimer);
+      try { conn.close(); } catch { /* ignore */ }
+      reject(new Error('websocket connection aborted'));
+    };
+    ws.abort.signal.addEventListener('abort', abortHandshake, { once: true });
 
     conn.addEventListener('open', () => {
+      if (ws.abort.signal.aborted || c.ws !== ws as unknown as Client['ws']) {
+        try { conn.close(); } catch { /* ignore */ }
+        return;
+      }
       opened = true;
     });
 
     conn.addEventListener('error', (e: Event) => {
       clearTimeout(handshakeTimer);
+      ws.abort.signal.removeEventListener('abort', abortHandshake);
       reject(new Error(`dial: ${(e as ErrorEvent).message ?? 'connection error'}`));
     });
 
@@ -207,6 +265,7 @@ async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
         const welcome = JSON.parse(msg) as WSEvent;
         if (welcome.type !== 'welcome') {
           clearTimeout(handshakeTimer);
+          ws.abort.signal.removeEventListener('abort', abortHandshake);
           try {
             conn.close();
           } catch {
@@ -215,7 +274,9 @@ async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
           reject(new Error(`unexpected first message: ${welcome.type}`));
           return;
         }
+        void assertCurrent(c, ws).then(() => {
         clearTimeout(handshakeTimer);
+        ws.abort.signal.removeEventListener('abort', abortHandshake);
         ws.conn = conn;
         ws.connected = true;
 
@@ -245,6 +306,7 @@ async function wsConnectOnce(c: Client, ws: WSStateImpl): Promise<void> {
         // eslint-disable-next-line no-console
         console.log(`[acosmi-sdk] websocket connected, connId=${welcome.connId ?? ''}`);
         resolve();
+        }).catch(reject);
       } catch (parseErr) {
         clearTimeout(handshakeTimer);
         try {
@@ -262,7 +324,7 @@ async function wsLoop(c: Client, ws: WSStateImpl): Promise<void> {
   try {
     while (true) {
       // 读循环
-      await wsReadLoop(ws);
+      await wsReadLoop(c, ws);
 
       // 检查是否该退出
       if (ws.abort.signal.aborted) return;
@@ -306,7 +368,7 @@ async function wsLoop(c: Client, ws: WSStateImpl): Promise<void> {
   }
 }
 
-async function wsReadLoop(ws: WSStateImpl): Promise<void> {
+async function wsReadLoop(c: Client, ws: WSStateImpl): Promise<void> {
   const conn = ws.conn;
   if (!conn) return;
 
@@ -315,11 +377,11 @@ async function wsReadLoop(ws: WSStateImpl): Promise<void> {
       try {
         const data = e.data as string;
         const event = JSON.parse(data) as WSEvent;
-        try {
-          ws.cfg.onEvent(event);
-        } catch {
-          // ignore handler 内部错误
-        }
+        void assertCurrent(c, ws).then(() => {
+          try { ws.cfg.onEvent(event); } catch { /* observer isolation */ }
+        }).catch(() => {
+          try { conn.close(); } catch { /* ignore */ }
+        });
       } catch {
         // 解析失败忽略
       }

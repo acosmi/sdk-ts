@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   Client,
+  InMemoryTokenStore,
   DEFAULT_GATEWAY_BASE_URL,
   normalizeGatewayBaseURL,
 } from '../src/index';
@@ -133,7 +134,7 @@ describe('Client constructor — Phase 0 §2 alias', () => {
   });
 
   it('Client.create resolves with normalized serverURL (no token persistence regression)', async () => {
-    const c = await Client.create({ baseURL: 'https://gw.example/api/v4/' });
+    const c = await Client.create({ baseURL: 'https://gw.example/api/v4/', store: new InMemoryTokenStore() });
     expect(c.serverURL).toBe('https://gw.example/api/v4');
   });
 });

@@ -7,7 +7,8 @@
 ## 状态
 
 - **主实现 / 事实标准**：本 TS SDK 现为 Acosmi SDK 的主力实现。Go SDK [acosmi-sdk-go](https://github.com/acosmi/acosmi-sdk-go) 已暂停维护，待 TS 稳定后再从 TS 反向翻译补齐。
-- **当前版本：`2.18.0`**（`ManagedModel.thinking_levels` 类型面对齐，2026-08-29）。
+- **当前版本：`2.19.1`**（认证生命周期与上游错误归属修复，2026-09-08）。
+- **`v2.19.1`**：可选 versioned 凭据存储、原子刷新与本地退出，支持将 HTTP / WebSocket 绑定到固定登录身份；外部凭据使用独立的 external 模式。所有模式仅在完整网关错误合同证明用户访问凭据失效且请求未接收时自动刷新重试，普通 401 原样返回。versioned 模式要求上游 metadata 的认证合同为 2、网关错误合同为 1；默认 legacy 存储接口继续可用。详见 [CHANGELOG](./CHANGELOG.md)。
 - **`v2.18.0`（加性类型发布）**：`ManagedModel` 新增可选字段 `thinking_levels?: string[]` —— 网关下发的**升序思考档位 id 列表**（`ThinkingOff`/`ThinkingHigh`/`ThinkingMax` 的子集）。`listModels` 对它原样透传，公开签名向后兼容、零行为变化；`[]` = 该模型无思考档，`undefined` = 旧网关未播报（按"未知"处理，严禁自行推档）。详见〈思考档位 `thinking_levels`〉。
 - **`v2.17.0`（安全修复发布）**：桌面 loopback `authorize()` 对 `/callback` 的**一切形态**（成功 / OAuth error / 畸形）先行校验 CSRF `state`，且必须"恰好一个"并严格等值 —— 缺失、重复（含重复的正确值）、错值一律以稳定错误码 `state_mismatch` 拒绝本次登录；此前携带 OAuth error 的回调绕过 state 直接结算 `auth_denied`，本机任意进程零知识即可打断/塑形等待中的登录，且 `?code=…&state=<正确值>&state=x` 这类重复参数可蒙混通过。`finally` 补 `closeIdleConnections()`，每条终止路径以端口完全关闭收尾。公开 API 签名零变化；回归闸门 `test/auth/desktop-loopback-state.test.ts` 十路终止矩阵。
 - **`v2.15.0`（加性兼容发布）**：新增 `classifySourcesEvent()`、`SourcesEventParseResult` 与稳定 issue code，把 `not_sources`、合法 `empty_sources`、非空 `sources`、`malformed_sources` 明确分开。既有 `parseSourcesEvent()` 的代码路径、宽松判定、`null` 条件和返回对象形状保持原样；现有 consumer 无需改动，新 consumer 才选择严格 API。
@@ -330,6 +331,32 @@ const stream = client.chatMessagesStream(
 ```
 
 语义是「链路刚刚有动静」，不是「来了一个事件」；对每条 SSE 行触发一次，早于任何过滤与解析。回调抛出的错误会被吞掉且不中断流（旁路信号不该有能力杀死主链路）。不传时行为逐字节不变。
+
+### 网关请求 ID 回调 `onGatewayRequestID`（v2.19+）
+
+如果你要把**用户可见的失败**关联回上游那一次网关调用与它产生的计费行，接这个回调。
+
+网关在响应头 `X-Acosmi-Request-Id`（常量 `GATEWAY_REQUEST_ID_HEADER`）里下发 `consumeRequestID` —— 它就是 `managed_model_usage_logs.request_id` 的值，是能 join 到计费行的那个键。
+
+> ⚠️ 它**不是**网关的传输层 `X-Request-ID`。那一个独立生成、从不写进任何计费表，两者永不相等。用错的后果是恒空 join —— 不报错，只是下次事故照样查不动。
+
+```ts
+let gatewayRequestId: string | undefined;
+
+const stream = client.chatMessagesStream(
+  modelId,
+  { messages, max_tokens: 4096 },
+  abortSignal,
+  onUpstreamActivity,
+  id => { gatewayRequestId = id; },   // ← 响应头到达时触发，早于第一个事件
+);
+```
+
+回调在响应头到达后触发**至多一次**，且在第一个 SSE 事件之前 —— 因此它覆盖「流中段被掐断」「上游 200 但零事件」「HTTP 错误」全部形态；流内事件在「事件根本没来」的场景里恰恰不存在，而那正是最需要诊断的那一种。
+
+同步路径 `chatMessages` / `chat` 的第 4 个实参是同一个回调。
+
+网关没下发（旧版本 / 非托管路径）时回调**一次都不触发**，SDK 绝不合成占位值；流照常出。浏览器端消费方还需网关 CORS `Access-Control-Expose-Headers` 放行该头（网关 v2026-09-01 起已放行）。
 
 ### Sources SSE 四态分类（v2.15+）
 
@@ -1143,7 +1170,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.18.0 | **当前版本** | **`ManagedModel.thinking_levels` 类型面对齐（2026-08-29）**。加性新增可选字段 `thinking_levels?: string[]`：网关下发的升序思考档位 id 列表（`'off'`/`'high'`/`'max'` 的子集，按「admin 声明 ∩ wire 层真投递」派生）。`listModels` 原样透传，无归一化、无新方法、公开签名零变化。`[]` = 该模型无思考档；`undefined` = 旧网关未播报，调用方按"未知"处理，严禁按模型名推档。 |
+| 2.19.0 | **当前版本** | **网关消费请求 ID 透出（2026-09-01）**。网关把 `consumeRequestID`（即 `managed_model_usage_logs.request_id`）放进 `X-Acosmi-Request-Id` 响应头；加性导出 `GATEWAY_REQUEST_ID_HEADER` 与 `GatewayRequestIDCallback`，`chatMessagesStream` / `chatStream` 新增第 5 个可选实参、`chatMessages` / `chat` 新增第 4 个可选实参。响应头在首字节之前到达，因此覆盖流中段中断 / 零事件 / HTTP 错误全部形态。旧网关下回调零触发、绝不合成占位值，流照常出。不传回调时行为逐字节不变。 |
+| 2.18.0 | 稳定版 | **`ManagedModel.thinking_levels` 类型面对齐（2026-08-29）**。加性新增可选字段 `thinking_levels?: string[]`：网关下发的升序思考档位 id 列表（`'off'`/`'high'`/`'max'` 的子集，按「admin 声明 ∩ wire 层真投递」派生）。`listModels` 原样透传，无归一化、无新方法、公开签名零变化。`[]` = 该模型无思考档；`undefined` = 旧网关未播报，调用方按"未知"处理，严禁按模型名推档。 |
 | 2.17.0 | 稳定版 | **桌面 loopback OAuth state 全路径闸 + 端口确定性关闭（2026-08-15）**。`/callback` 一切形态（成功 / OAuth error / 畸形）先验 `state` 且必须恰好一个并严格等值；缺失 / 重复（含重复的正确值）/ 错值一律 `state_mismatch` 拒绝且不再被误结算为 `auth_denied`；错误信息只描述形态，不回显 code / state / token / 完整 callback query。`finally` 补 `closeIdleConnections()`（Node 18 上 `close()` 不关残留 idle keep-alive）。用户真拒绝（OAuth error + 正确 state）语义保留为 `auth_denied`。公开 API 签名零变化。 |
 | 2.16.0 | 稳定版 | **chat 超时预算真正下传 + 流式活性回调（2026-08-06）**。`chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` / `generateVideo` 此前漏传 `doJSONFullRaw` 的第 5 实参，内层 **30 秒**默认值恒先于外层 11 分钟预算触发 —— v1.6.0 那次"调整为 11min"一天都没生效过（生产实证：单日 29 条 latency≈30 000 ms 的 499，横跨 4 厂商 5 模型，受害最重的是默认主循环模型）。加性导出 `CHAT_REQUEST_TIMEOUT_MS`；`chatStream` / `chatMessagesStream` 新增第 4 个可选实参 `onUpstreamActivity`，让被 `isSSECommentLine` 吞掉的保活注释行（以及 OpenAI 格式下零事件的 data 行）能抵达消费方的空闲看门狗。不传回调时行为逐字节不变。 |
 | 2.15.0 | 稳定版 | **sources 四态分类与零结果契约（2026-08-02）**。加性新增 `classifySourcesEvent`、`SourcesEventParseResult` 与稳定 issue code，区分非 sources、合法空结果、有效结果和结构损坏；未知额外字段继续兼容。既有 `parseSourcesEvent` 的返回形状、宽松解析和 `null` 条件保持不变。 |

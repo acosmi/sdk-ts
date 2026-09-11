@@ -2,6 +2,7 @@
 
 import type { APIResponse } from '../shared/api-response';
 import { apiResponseBusinessError } from '../shared/api-response';
+import { isUserAccessTokenRejected } from '../shared/errors';
 import { Client, DEFAULT_API_TIMEOUT_MS } from '../core/client';
 import {
   iterSSELines,
@@ -560,10 +561,10 @@ export class AgentRunsClient {
     const resp = await this.client.doRequest({ method, url, headers, body: bodyStr }, signal);
 
     if (resp.status === 401 && opts.retryOn401 && !retried) {
-      try {
-        await resp.body?.cancel();
-      } catch {}
-      await this.client.forceRefresh(signal);
+      const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+      const authError = parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+      if (!isUserAccessTokenRejected(authError)) throw authError;
+      await this.client.forceRefresh(signal, token);
       // 复用同一组合 signal (含剩余超时预算): 直接走 inner, 不再重套超时。
       return this.requestRawInner(method, path, body, signal, opts, true);
     }

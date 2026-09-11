@@ -13,7 +13,7 @@ import type {
   SkillStoreQuery,
   SkillSummary,
 } from './types';
-import { RateLimitError } from '../shared/errors';
+import { RateLimitError, isUserAccessTokenRejected } from '../shared/errors';
 import { Client } from '../core/client';
 import {
   classifyTransport,
@@ -319,13 +319,11 @@ async function uploadSkillInternal(
     }
 
     if (resp.status === 401 && !retried) {
+      const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+      const authError = parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+      if (!isUserAccessTokenRejected(authError)) throw authError;
       try {
-        await resp.body?.cancel();
-      } catch {
-        /* ignore */
-      }
-      try {
-        await c.forceRefresh(ctl.signal);
+        await c.forceRefresh(ctl.signal, token);
       } catch (refreshErr) {
         throw new Error(
           `upload: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,

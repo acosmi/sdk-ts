@@ -51,7 +51,7 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 function emptyResponse(status: number, headers: Record<string, string> = {}): Response {
-  return new Response('', { status, headers });
+  return status === 401 ? jsonResponse({ errorContractVersion: 1, faultDomain: 'user_auth', errorCode: 'USER_ACCESS_TOKEN_INVALID', transportRequestId: null, consumeRequestId: null, providerRequestId: null, requestDisposition: 'not_accepted', retryable: false }, status) : new Response('', { status, headers });
 }
 
 interface CapturedCall {

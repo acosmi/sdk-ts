@@ -301,7 +301,8 @@ export type LoginErrCode =
   | 'auth_timeout'
   | 'token_exchange_failed'
   | 'ssl_proxy_detected'
-  | 'state_mismatch';
+  | 'state_mismatch'
+  | 'credential_install_rejected';
 
 export const ErrDiscovery = 'discovery_failed' as const;
 export const ErrRegistration = 'registration_failed' as const;
@@ -315,6 +316,7 @@ export const ErrStateMismatch = 'state_mismatch' as const;
 
 /** 登录流程事件 */
 export interface LoginEvent {
+  attemptId?: string;
   type: LoginEventType;
   url?: string;
   error?: string;
@@ -825,6 +827,7 @@ async function postToken(
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<TokenResponse> {
   const ctl = withTimeout(authTimeoutMs, signal);
+  try {
   let resp: Response;
   try {
     resp = await fetchImpl(endpoint, {
@@ -835,8 +838,6 @@ async function postToken(
     });
   } catch (e) {
     throw new Error(`token request: ${e instanceof Error ? e.message : String(e)}`);
-  } finally {
-    ctl.dispose();
   }
 
   if (!resp.ok) {
@@ -857,6 +858,7 @@ async function postToken(
   } catch (e) {
     throw new Error(`token: decode: ${e instanceof Error ? e.message : String(e)}`);
   }
+  } finally { ctl.dispose(); }
 }
 
 /**

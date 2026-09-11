@@ -8,6 +8,125 @@
 import type { TokenSet } from '../auth/types';
 import { isValidTokenSet } from '../auth/types';
 
+export type CredentialState =
+  | 'signed_out'
+  | 'pending_identity'
+  | 'ready'
+  | 'refresh_reserved'
+  | 'refresh_dispatched'
+  | 'reauth_required'
+  | 'configuration_error';
+
+export type CredentialReason =
+  | 'invalid_grant'
+  | 'refresh_outcome_unknown'
+  | 'migration_required'
+  | 'identity_unavailable'
+  | 'invalid_client'
+  | 'invalid_scope'
+  | 'unsupported_grant_type'
+  | 'auth_contract_unsupported';
+
+export interface CredentialAuthorityConfig {
+  serverURL: string;
+  issuer: string;
+  oauthProfile: 'desktop';
+  authContractVersion: 2;
+  errorContractVersion: 1;
+}
+
+export interface CredentialPrincipal {
+  issuer: string;
+  subject: string;
+  organizationId: string | null;
+}
+
+export interface CredentialRefreshOperation {
+  operationId: string;
+  sessionId: string;
+  baseRevision: string;
+  phase: 'reserved' | 'dispatched';
+  returnState: 'ready' | 'pending_identity';
+  startedAt: string;
+  dispatchedAt: string | null;
+  deadlineAt: string | null;
+}
+
+export interface CredentialLoginAttempt {
+  attemptId: string;
+  baseSessionId: string | null;
+  startedAt: string;
+}
+
+export interface VerifiedCredentialIdentity {
+  authSessionId: string;
+  principal: CredentialPrincipal;
+  displayName?: string;
+  avatarUrl?: string;
+  email?: string;
+  imageUrl?: string;
+  accountCreatedAt?: string;
+  requiresPhoneBinding?: boolean;
+  hasExtraUsageEnabled?: boolean;
+  billingType?: string;
+  subscriptionCreatedAt?: string;
+  rateLimitTier?: string;
+  organizationName?: string;
+  verifiedAt: string;
+}
+
+export interface CredentialMutationReceipt {
+  mutationId: string;
+  operationId: string | null;
+  resultRevision: string;
+}
+
+/** Durable authoritative snapshot. Revisions are decimal strings to avoid JS truncation. */
+export interface CredentialSnapshot {
+  storeInstanceId: string;
+  authorityConfig: CredentialAuthorityConfig | null;
+  revision: string;
+  authSessionId: string | null;
+  principal: CredentialPrincipal | null;
+  credentialState: CredentialState;
+  tokenSet: TokenSet | null;
+  refreshOperation: CredentialRefreshOperation | null;
+  loginAttempt: CredentialLoginAttempt | null;
+  reason: CredentialReason | null;
+  lastMutation: CredentialMutationReceipt | null;
+  lastLoginAttemptId: string | null;
+  verifiedIdentity: VerifiedCredentialIdentity | null;
+}
+
+export type CredentialRequestOwner = Pick<
+  CredentialSnapshot,
+  'storeInstanceId' | 'authSessionId' | 'principal'
+>;
+
+export interface CredentialCASExpected {
+  storeInstanceId: string;
+  revision: string;
+  authSessionId: string | null;
+  state: CredentialState;
+  operationId: string | null;
+}
+
+export type CredentialCASResult =
+  | { status: 'committed'; snapshot: CredentialSnapshot }
+  | { status: 'superseded'; snapshot: CredentialSnapshot }
+  | { status: 'storage_error'; error: unknown };
+
+/** Explicit opt-in store; versioned mode never calls TokenStore.save/load/clear. */
+export interface VersionedCredentialStore {
+  readSnapshot(signal?: AbortSignal): Promise<CredentialSnapshot>;
+  compareAndSwap(
+    expected: CredentialCASExpected,
+    nextState: CredentialSnapshot,
+    mutationId: string,
+    signal?: AbortSignal,
+  ): Promise<CredentialCASResult>;
+}
+
 /**
  * Token 持久化接口
  * 桌面智能体可自行实现 (如 macOS Keychain / Windows Credential Manager)

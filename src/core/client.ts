@@ -1,3 +1,4 @@
+import { CredentialLifecycle, type CredentialStateNotification } from './credentials';
 // client.ts — 端口自 acosmi-sdk-go/client.go (2168 行)
 //
 // 主 Client class (核心: token 管理 / login / chat / SSE / HTTP)。
@@ -34,7 +35,7 @@ import {
 } from '../models/types';
 import { type ModelCoefficient } from '../billing/types';
 import { type ServerMetadata, type TokenSet, tokenSetIsExpired } from '../auth/types';
-import { ModelNotFoundError } from '../shared/errors';
+import { ModelNotFoundError, isUserAccessTokenRejected, readGatewayErrorContract } from '../shared/errors';
 import { type APIResponse, apiResponseBusinessError } from '../shared/api-response';
 import {
   discover,
@@ -59,7 +60,15 @@ import {
   type LoginOptions,
   type OAuthMetadataProfile,
 } from '../auth/auth';
-import { type TokenStore, FileTokenStore, InMemoryTokenStore, LocalStorageTokenStore } from './store';
+import {
+  type CredentialSnapshot,
+  type CredentialRequestOwner,
+  type VersionedCredentialStore,
+  type TokenStore,
+  FileTokenStore,
+  InMemoryTokenStore,
+  LocalStorageTokenStore,
+} from './store';
 import { type RetryPolicy, effectivePolicy, computeBackoff } from './retry';
 import {
   getAdapterForModel,
@@ -261,6 +270,24 @@ export interface Config {
   /** token 持久化实现, 缺省时按平台选 (Node File / Browser LocalStorage / Memory) */
   store?: TokenStore;
 
+  /** Opt-in durable CAS credential lifecycle. Legacy callers omit this field. */
+  credentialMode?: 'legacy' | 'versioned' | 'external';
+
+  /** Required exactly when credentialMode is versioned. */
+  versionedCredentialStore?: VersionedCredentialStore;
+
+  /** Optional owner fence for requests issued by this versioned Client. */
+  credentialRequestOwner?: CredentialRequestOwner;
+
+  /** Supplies a source-owned access token for each request in external mode. */
+  accessTokenProvider?: (signal?: AbortSignal) => Promise<string> | string;
+
+  /** Runs after a new authorization-code exchange and before durable install. */
+  beforeCredentialInstall?: (
+    input: { accessToken: string; attemptId: string; serverURL: string; clientId: string },
+    signal?: AbortSignal,
+  ) => Promise<void> | void;
+
   /** 自定义 fetch 实现 (默认 globalThis.fetch) */
   fetchImpl?: typeof fetch;
 
@@ -380,6 +407,57 @@ function notifyUpstreamActivity(cb: UpstreamActivityCallback | undefined): void 
 }
 
 /**
+ * 网关下发消费请求 ID 的响应头名。
+ *
+ * 值 = cloud-agent 的 `consumeRequestID`, 也就是 `managed_model_usage_logs.request_id`
+ * 的值 —— 消费方拿它可以把一次用户可见的失败直接 join 到上游那次网关调用与它产生的
+ * 计费行。
+ *
+ * **不要**与 `X-Request-ID` 混用: 那是网关的传输层追踪 ID, 独立生成、从不写进任何
+ * 计费表, 两者永不相等。用错的后果是恒空 join —— 不报错, 只是下次事故照样查不动。
+ */
+export const GATEWAY_REQUEST_ID_HEADER = 'X-Acosmi-Request-Id';
+
+/**
+ * 网关消费请求 ID 回调 (2026-09-01)。
+ *
+ * **为什么需要它**: 消费方 (如 CrabCode) 会在流成功、但流内证据不合格时对用户报失败
+ * (2026-08-31 事故形态: 6 次上游搜索全部成功并已计费, 客户端却全部判失败)。这类失败
+ * 此前无法关联到上游那一次调用 —— 客户端与网关之间没有任何共同标识符, 定位只能靠
+ * 时间戳与模型名人工对齐。
+ *
+ * 头在**首字节之前**发出, 因此覆盖流中段中断、零事件、HTTP 错误等全部形态; 而流内
+ * 事件在「事件根本没来」的场景里恰恰不存在 —— 那正是最需要诊断的那一种。
+ *
+ * 回调在响应头到达后触发**至多一次**; 网关没下发 (旧版本 / 非托管路径) 时**一次都不
+ * 触发** —— 绝不合成占位值。回调抛错会被吞掉且不中断流 (旁路信号不该有能力杀死主链路)。
+ */
+export type GatewayRequestIDCallback = (requestID: string) => void;
+
+/** 从响应头读出消费请求 ID; 缺失 / 空白一律 undefined —— 宁可不给, 不可编造。 */
+function readGatewayRequestID(headers: Headers): string | undefined {
+  const raw = headers.get(GATEWAY_REQUEST_ID_HEADER);
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** 触发消费请求 ID 回调; 消费方回调抛错不得污染主链路 (与 notifyUpstreamActivity 同构)。 */
+function notifyGatewayRequestID(
+  cb: GatewayRequestIDCallback | undefined,
+  headers: Headers,
+): void {
+  if (!cb) return;
+  const id = readGatewayRequestID(headers);
+  if (id === undefined) return;
+  try {
+    cb(id);
+  } catch {
+    /* 旁路信号: 消费方的错误不传播回主链路 */
+  }
+}
+
+/**
  * 非流式 JSON API 请求的默认超时 (毫秒)。
  *
  * 子 client (agent-runs / compliance) 的同步 JSON 调用未传 signal 时套用此上限,
@@ -450,6 +528,14 @@ export class Client {
   tokens: TokenSet | null = null;
   /** token 持久化 */
   store: TokenStore;
+  readonly credentialMode: 'legacy' | 'versioned' | 'external';
+  private readonly versionedCredentialStore: VersionedCredentialStore | null;
+  private readonly accessTokenProvider: Config['accessTokenProvider'];
+  private readonly beforeCredentialInstall: Config['beforeCredentialInstall'];
+  private readonly credentialAuthority: string;
+  private readonly credentialRequestOwner: CredentialRequestOwner | null;
+  private lifecycle: CredentialLifecycle | null = null;
+
   /** fetch 实现 (默认 globalThis.fetch) */
   fetchImpl: typeof fetch;
 
@@ -487,6 +573,7 @@ export class Client {
   /** V29 系数缓存 (TTL 8s, listCoefficients 内部用) */
   coefCacheData: ModelCoefficient[] | null = null;
   coefCacheTimeMs = 0;
+  private credentialOwnerKey: string | null = null;
   /** 串行化锁 (替代 Go sync.Mutex) */
   private coefMu: Promise<void> = Promise.resolve();
 
@@ -504,8 +591,108 @@ export class Client {
     this.oauthMetadataProfile = cfg.oauthMetadataProfile ?? 'desktop';
     this.browserRefreshMode = cfg.browserRefreshMode ?? 'direct';
     this.refreshProxyURL = cfg.refreshProxyURL ?? null;
-    this.store = cfg.store ?? defaultTokenStore();
+    this.credentialMode = cfg.credentialMode ?? 'legacy';
+    this.credentialAuthority = new URL(this.serverURL).origin;
+    if (this.credentialMode === 'versioned' && !cfg.versionedCredentialStore) {
+      throw new Error('versionedCredentialStore is required for credentialMode=versioned');
+    }
+    if (cfg.credentialRequestOwner && this.credentialMode !== 'versioned') {
+      throw new Error('credentialRequestOwner requires credentialMode=versioned');
+    }
+    if (this.credentialMode === 'legacy' && cfg.versionedCredentialStore) {
+      throw new Error('credentialMode=versioned is required when versionedCredentialStore is provided');
+    }
+    if (this.credentialMode === 'external' && cfg.versionedCredentialStore) {
+      throw new Error('versionedCredentialStore is incompatible with credentialMode=external');
+    }
+    if (this.credentialMode !== 'external' && cfg.accessTokenProvider) {
+      throw new Error('accessTokenProvider requires credentialMode=external');
+    }
+    if (this.credentialMode === 'external' && !cfg.accessTokenProvider) {
+      throw new Error('accessTokenProvider is required for credentialMode=external');
+    }
+    if (this.credentialMode !== 'versioned' && cfg.beforeCredentialInstall) {
+      throw new Error('beforeCredentialInstall requires credentialMode=versioned');
+    }
+    if (this.credentialMode !== 'legacy') {
+      const authority = new URL(this.serverURL).origin;
+      for (const [name, override] of [['apiBaseURL', this.apiBaseURL], ['complianceBaseURL', this.complianceBaseURL]] as const) {
+        if (override && new URL(override).origin !== authority) {
+          throw new Error(`${name} must use the credential authority ${authority}`);
+        }
+      }
+    }
+    this.accessTokenProvider = cfg.accessTokenProvider;
+    this.beforeCredentialInstall = cfg.beforeCredentialInstall;
+    this.credentialRequestOwner = cfg.credentialRequestOwner
+      ? {
+          storeInstanceId: cfg.credentialRequestOwner.storeInstanceId,
+          authSessionId: cfg.credentialRequestOwner.authSessionId,
+          principal: cfg.credentialRequestOwner.principal
+            ? {
+                issuer: cfg.credentialRequestOwner.principal.issuer,
+                subject: cfg.credentialRequestOwner.principal.subject,
+                organizationId: cfg.credentialRequestOwner.principal.organizationId,
+              }
+            : null,
+        }
+      : null;
     this.fetchImpl = cfg.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    this.versionedCredentialStore = cfg.versionedCredentialStore ?? null;
+    if (this.versionedCredentialStore) this.lifecycle = new CredentialLifecycle(this.versionedCredentialStore, {
+      serverURL: this.serverURL, fetch: this.fetchImpl,
+      metadata: signal => discoverWithProfile(this.serverURL, 'desktop', signal, this.fetchImpl),
+      profile: async (tokens, signal) => {
+        const gatewayRoot = this.serverURL.replace(/\/api\/v4$/, '');
+        const profileURL = `${gatewayRoot}/api/oauth/profile`;
+        this.assertCredentialURL(profileURL);
+        const response = await this.fetchImpl(profileURL, { headers: { Authorization: `Bearer ${tokens.access_token}` }, signal });
+        if (!response.ok) {
+          const bodyBytes = response.body ? await readLimited(response.body, maxErrorBodySize) : new Uint8Array();
+          const failure = parseHTTPErrorWithHeader(response.status, bodyBytes, response.headers);
+          const contract = readGatewayErrorContract(failure);
+          const code = contract?.errorCode ?? null;
+          if (code === 'INVALID_SCOPE') throw new Error('invalid_scope');
+          if (code === 'AUTH_CONTRACT_UNSUPPORTED') throw new Error('auth_contract_unsupported');
+          if (code === 'ACCOUNT_NOT_FOUND') throw new Error('account_permission');
+          throw new Error('identity_unavailable');
+        }
+        const body = await response.json() as {
+          account?: {
+            uuid?: string; display_name?: string; avatar_url?: string; image_url?: string;
+            email?: string; created_at?: string; requires_phone_binding?: boolean;
+            picture?: string; image?: string;
+          };
+          organization?: { uuid?: string; rate_limit_tier?: string; name?: string;
+            has_extra_usage_enabled?: boolean; billing_type?: string; subscription_created_at?: string };
+          avatar_url?: string; picture?: string; image?: string;
+          code?: string;
+        };
+        const subject = body.account?.uuid;
+        if (typeof subject !== 'string' || !subject) throw new Error('invalid_response');
+        const account = body.account!;
+        const organization = body.organization;
+        return {
+          subject,
+          organizationId: organization?.uuid || null,
+          ...(typeof account.display_name === 'string' ? { displayName: account.display_name } : {}),
+          ...([account.avatar_url, account.picture, account.image, body.avatar_url, body.picture, body.image]
+            .find((value): value is string => typeof value === 'string') !== undefined
+            ? { avatarUrl: [account.avatar_url, account.picture, account.image, body.avatar_url, body.picture, body.image]
+                .find((value): value is string => typeof value === 'string')! } : {}),
+          ...(typeof account.email === 'string' ? { email: account.email } : {}),
+          ...(typeof account.image_url === 'string' ? { imageUrl: account.image_url } : {}),
+          ...(typeof account.created_at === 'string' ? { accountCreatedAt: account.created_at } : {}),
+          ...(typeof account.requires_phone_binding === 'boolean' ? { requiresPhoneBinding: account.requires_phone_binding } : {}),
+          ...(typeof organization?.has_extra_usage_enabled === 'boolean' ? { hasExtraUsageEnabled: organization.has_extra_usage_enabled } : {}),
+          ...(typeof organization?.billing_type === 'string' ? { billingType: organization.billing_type } : {}),
+          ...(typeof organization?.subscription_created_at === 'string' ? { subscriptionCreatedAt: organization.subscription_created_at } : {}),
+          ...(typeof organization?.rate_limit_tier === 'string' ? { rateLimitTier: organization.rate_limit_tier } : {}),
+          ...(typeof organization?.name === 'string' ? { organizationName: organization.name } : {}),
+        };
+      },
+    });
+    this.store = cfg.store ?? defaultTokenStore();
     this.retryPolicy = effectivePolicy(cfg.retryPolicy ?? null);
   }
 
@@ -515,6 +702,11 @@ export class Client {
    */
   static async create(cfg: Config = {}): Promise<Client> {
     const c = new Client(cfg);
+    if (c.credentialMode === 'external') return c;
+    if (c.credentialMode === 'versioned') {
+      await c.reconcileCredentials();
+      return c;
+    }
     try {
       const tokens = await c.store.load();
       if (tokens) {
@@ -528,6 +720,74 @@ export class Client {
       // store 损坏 — 静默忽略, 让 caller Login 重建
     }
     return c;
+  }
+
+  /** Read the durable authority. Available only in explicit versioned mode. */
+  async getCredentialSnapshot(signal?: AbortSignal): Promise<CredentialSnapshot> {
+    if (!this.versionedCredentialStore) {
+      throw new Error('getCredentialSnapshot requires credentialMode=versioned');
+    }
+    return this.versionedCredentialStore.readSnapshot(signal);
+  }
+
+  /** Reconcile memory from durable state; storage errors never clear confirmed memory. */
+  async reconcileCredentials(signal?: AbortSignal): Promise<CredentialSnapshot> {
+    const snapshot = await this.lifecycle!.reconcile(signal);
+    this.adoptCredentialOwner(snapshot);
+    this.tokens = snapshot.credentialState === 'ready' ? snapshot.tokenSet : null;
+    return snapshot;
+  }
+
+  private ownerKey(snapshot: CredentialSnapshot): string {
+    return `${snapshot.storeInstanceId}\u0000${snapshot.authSessionId ?? ''}\u0000${snapshot.principal?.issuer ?? ''}\u0000${snapshot.principal?.subject ?? ''}\u0000${snapshot.principal?.organizationId ?? ''}`;
+  }
+
+  private adoptCredentialOwner(snapshot: CredentialSnapshot): void {
+    const next = this.ownerKey(snapshot);
+    if (this.credentialOwnerKey !== null && this.credentialOwnerKey !== next) {
+      this.modelCache = [];
+      this.modelCacheTimeMs = 0;
+      this.coefCacheData = null;
+      this.coefCacheTimeMs = 0;
+    }
+    this.credentialOwnerKey = next;
+  }
+
+  async ensureCredential(signal?: AbortSignal): Promise<string> {
+    if (!this.lifecycle) return this.ensureToken(signal);
+    const token = await this.lifecycle.ensure(signal, undefined, this.credentialRequestOwner ?? undefined);
+    const snapshot = await this.lifecycle.read(signal);
+    this.adoptCredentialOwner(snapshot);
+    this.tokens = snapshot.credentialState === 'ready' ? snapshot.tokenSet : null;
+    return token;
+  }
+
+  subscribeCredentialState(listener: (snapshot: CredentialStateNotification) => void): () => void {
+    if (!this.lifecycle) throw new Error('subscribeCredentialState requires credentialMode=versioned');
+    return this.lifecycle.subscribe(listener);
+  }
+
+  async retryCredentialIdentity(signal?: AbortSignal): Promise<CredentialSnapshot> {
+    const snapshot = await this.getCredentialSnapshot(signal);
+    if (!snapshot.authSessionId) throw new Error('not authorized');
+    const ready = await this.lifecycle!.bindIdentity(snapshot.authSessionId, signal);
+    this.adoptCredentialOwner(ready);
+    this.tokens = ready.credentialState === 'ready' ? ready.tokenSet : null;
+    return ready;
+  }
+
+  async logoutCredential(
+    signal?: AbortSignal,
+    expected?: { storeInstanceId: string; authSessionId: string | null },
+  ) {
+    if (!this.lifecycle) throw new Error('logoutCredential requires credentialMode=versioned');
+    const result = await this.lifecycle.logout(signal, expected);
+    if (result.status === 'committed' || result.status === 'already_signed_out') {
+      const current = await this.lifecycle.read(signal);
+      this.adoptCredentialOwner(current);
+      this.tokens = null;
+    }
+    return result;
   }
 
   // ===========================================================================
@@ -599,6 +859,45 @@ export class Client {
     opts: (LoginOptions & { handler?: ((e: LoginEvent) => void) | null }) | undefined,
     signal?: AbortSignal,
   ): Promise<void> {
+    if (this.lifecycle) {
+      const attempt = await this.lifecycle.reserveLogin(signal);
+      let installHookRejected = false;
+      try {
+        const registration = await register(attempt.metadata, appName, signal, this.fetchImpl);
+        await this.lifecycle.assertLogin(attempt.attemptId, signal);
+        const authorization = await authorize(attempt.metadata, registration.client_id, scopes, { ...opts, handler: opts?.handler ?? undefined, signal });
+        await this.lifecycle.assertLogin(attempt.attemptId, signal);
+        const response = await exchangeCode(attempt.metadata, registration.client_id, authorization.result.code, authorization.result.redirectURI, authorization.verifier, signal, this.fetchImpl);
+        if (!Number.isFinite(response.expires_in) || response.expires_in <= 0) throw new Error('invalid_response');
+        await this.lifecycle.assertLogin(attempt.attemptId, signal);
+        try {
+          await this.beforeCredentialInstall?.({
+            accessToken: response.access_token,
+            attemptId: attempt.attemptId,
+            serverURL: this.serverURL,
+            clientId: registration.client_id,
+          }, signal);
+        } catch (error) {
+          installHookRejected = true;
+          throw error;
+        }
+        await this.lifecycle.assertLogin(attempt.attemptId, signal);
+        const ready = await this.lifecycle.installLogin(attempt.attemptId, newTokenSet(response, registration.client_id, this.serverURL), signal);
+        const current = await this.getCredentialSnapshot(signal);
+        if (current.revision !== ready.revision || current.authSessionId !== ready.authSessionId) throw new Error('superseded');
+        this.tokens = ready.tokenSet;
+        opts?.handler?.({ type: EventComplete, attemptId: attempt.attemptId });
+      } catch (error) {
+        const current = await this.getCredentialSnapshot();
+        if (current.loginAttempt?.attemptId === attempt.attemptId || current.lastLoginAttemptId === attempt.attemptId) {
+          opts?.handler?.(installHookRejected
+            ? { type: EventError, attemptId: attempt.attemptId, err_code: 'credential_install_rejected', error: 'credential_install_rejected' }
+            : { type: EventError, attemptId: attempt.attemptId, error: 'credential_login_failed' });
+        }
+        await this.lifecycle.cancelLogin(attempt.attemptId); throw error;
+      }
+      return;
+    }
     const handler = opts?.handler ?? undefined;
     const emit = (e: LoginEvent) => {
       if (handler) handler(e);
@@ -722,6 +1021,7 @@ export class Client {
 
   /** 吊销 token 并清除本地存储 */
   async logout(signal?: AbortSignal): Promise<void> {
+    if (this.lifecycle) { await this.logoutCredential(signal); await this.reconcileCredentials(signal); return; }
     const tokens = this.tokens;
     let meta = this.meta;
     this.tokens = null;
@@ -767,6 +1067,13 @@ export class Client {
    * 避免应用启动期 "login + 多个 API 调用" 并发场景下 4+ 条 "not authorized" 误报.
    */
   async ensureToken(signal?: AbortSignal): Promise<string> {
+    if (this.credentialMode === 'external') {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      const token = await this.accessTokenProvider!(signal);
+      if (typeof token !== 'string' || token.length === 0) throw new Error('external access token unavailable');
+      return token;
+    }
+    if (this.lifecycle) return this.lifecycle.ensure(signal, undefined, this.credentialRequestOwner ?? undefined);
     let tokens = this.tokens;
     const ready = this.tokenReady.promise;
     const inFlight = this.loginInFlight;
@@ -830,7 +1137,14 @@ export class Client {
   }
 
   /** 强制刷新 token (用于 401 重试) */
-  async forceRefresh(signal?: AbortSignal): Promise<void> {
+  async forceRefresh(signal?: AbortSignal, rejectedToken?: string): Promise<void> {
+    if (this.credentialMode === 'external') throw new Error('external credentials cannot be refreshed by the SDK');
+    if (this.lifecycle) {
+      await this.lifecycle.forceRefresh(signal, rejectedToken, this.credentialRequestOwner ?? undefined);
+      const snapshot = await this.lifecycle.read(signal);
+      this.tokens = snapshot.credentialState === 'ready' ? snapshot.tokenSet : null;
+      return;
+    }
     return this.withMu(() =>
       this.storeWithLock(async () => {
         // v1.0.2: 同 ensureToken — 进入跨进程临界区后先同步磁盘. 别的进程刚 rotation
@@ -1060,6 +1374,7 @@ export class Client {
     // 引导。opts.includeLocked 是面向调用方的语义名，拼成网关认的 picker=1。缺省=现状
     // （只返有桶模型），向后兼容旧客户端 / 内部消费者。
     const includeLocked = opts?.includeLocked === true;
+    const requestOwner = this.lifecycle ? this.ownerKey(await this.getCredentialSnapshot(signal)) : null;
     const path = includeLocked
       ? '/managed-models?picker=1'
       : '/managed-models';
@@ -1071,6 +1386,11 @@ export class Client {
     );
     // v1.2: 写缓存前归一化 input_modalities → inputModalities (snake/camel 双名兼容)
     const normalized = normalizeInputModalities(result.data);
+    if (requestOwner !== null) {
+      const current = await this.getCredentialSnapshot(signal);
+      if (this.ownerKey(current) !== requestOwner) throw new Error('superseded');
+      this.adoptCredentialOwner(current);
+    }
     // 全集模式（含 locked 行）只供 picker 展示，**不写** this.modelCache —— 后者是
     // 「可用模型」缓存（getModelCapabilities / quota 消费），写全集会让 locked 模型混入
     // 可用集（全集/子集互污）。缺省模式照旧缓存，行为完全不变。
@@ -1271,7 +1591,12 @@ export class Client {
    * 响应的 tokenRemaining / callRemaining 字段来自服务端 Header, 反映结算后余额
    * v0.5.0: 根据 provider 自动路由到 /anthropic 或 /chat 端点
    */
-  async chat(modelID: string, req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+  async chat(
+    modelID: string,
+    req: ChatRequest,
+    signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
+  ): Promise<ChatResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req (buildChatRequest 内部 sanitizer 也会改 rawMessages)。
     const r: ChatRequest = { ...req, stream: false };
     // 外层 ctl 界定本方法的总预算 (buildChatRequest 的 ensureModelCached 可能出网,
@@ -1292,6 +1617,9 @@ export class Client {
         ctl.signal,
         CHAT_REQUEST_TIMEOUT_MS,
       );
+
+      // 计费关联 (2026-09-01): 见 GatewayRequestIDCallback。
+      notifyGatewayRequestID(onGatewayRequestID, headers);
 
       const resp = adapter.parseResponse(result);
 
@@ -1450,14 +1778,15 @@ export class Client {
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): Promise<AnthropicResponse> {
     const m = await this.ensureModelCached(modelID, signal);
     const adapter = getAdapterForModel(m);
 
     if (adapter.format() === ProviderFormat.Anthropic) {
-      return this.chatMessagesAnthropic(modelID, req, adapter, signal);
+      return this.chatMessagesAnthropic(modelID, req, adapter, signal, onGatewayRequestID);
     }
-    return this.chatMessagesOpenAI(modelID, req, adapter, signal);
+    return this.chatMessagesOpenAI(modelID, req, adapter, signal, onGatewayRequestID);
   }
 
   private async chatMessagesAnthropic(
@@ -1465,6 +1794,7 @@ export class Client {
     req: ChatRequest,
     adapter: ProviderAdapter,
     signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): Promise<AnthropicResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: false };
@@ -1475,13 +1805,16 @@ export class Client {
       const data = JSON.stringify(body);
 
       // 第 5 实参不可省 — 见 chat() 处说明: 缺它内层恒落回 30s 默认值。
-      const { result } = await this.doJSONFullRaw(
+      const { result, headers } = await this.doJSONFullRaw(
         'POST',
         `/managed-models/${encodeURIComponent(modelID)}/anthropic`,
         data,
         ctl.signal,
         CHAT_REQUEST_TIMEOUT_MS,
       );
+
+      // 计费关联 (2026-09-01): 见 GatewayRequestIDCallback。
+      notifyGatewayRequestID(onGatewayRequestID, headers);
 
       // 尝试 APIResponse 包装: {"code":0,"message":"...","data":{...}}
       const rawStr = new TextDecoder().decode(result);
@@ -1516,6 +1849,7 @@ export class Client {
     req: ChatRequest,
     adapter: ProviderAdapter,
     signal?: AbortSignal,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): Promise<AnthropicResponse> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: false };
@@ -1527,13 +1861,16 @@ export class Client {
 
       const endpoint = `/managed-models/${encodeURIComponent(modelID)}${adapter.endpointSuffix()}`;
       // 第 5 实参不可省 — 见 chat() 处说明: 缺它内层恒落回 30s 默认值。
-      const { result } = await this.doJSONFullRaw(
+      const { result, headers } = await this.doJSONFullRaw(
         'POST',
         endpoint,
         data,
         ctl.signal,
         CHAT_REQUEST_TIMEOUT_MS,
       );
+
+      // 计费关联 (2026-09-01): 见 GatewayRequestIDCallback。
+      notifyGatewayRequestID(onGatewayRequestID, headers);
 
       // 解析 OpenAI 格式响应并转换为 AnthropicResponse
       const { parseOpenAIResponseToAnthropic } = await import('../models/adapters/openai');
@@ -1548,16 +1885,18 @@ export class Client {
    * v0.5.0: 根据 adapter 路由端点
    *
    * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
+   * @param onGatewayRequestID 见 {@link GatewayRequestIDCallback}
    */
   chatStream(
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncIterable<StreamEvent> {
     return {
       [Symbol.asyncIterator]: () =>
-        this.chatStreamGen(modelID, req, signal, false, onUpstreamActivity),
+        this.chatStreamGen(modelID, req, signal, false, onUpstreamActivity, onGatewayRequestID),
     };
   }
 
@@ -1567,16 +1906,18 @@ export class Client {
    * 无 started/settled/failed 自定义事件, 无 data: [DONE], message_stop 为自然结束
    *
    * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
+   * @param onGatewayRequestID 见 {@link GatewayRequestIDCallback}
    */
   chatMessagesStream(
     modelID: string,
     req: ChatRequest,
     signal?: AbortSignal,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncIterable<StreamEvent> {
     return {
       [Symbol.asyncIterator]: () =>
-        this.chatMessagesStreamGen(modelID, req, signal, false, onUpstreamActivity),
+        this.chatMessagesStreamGen(modelID, req, signal, false, onUpstreamActivity, onGatewayRequestID),
     };
   }
 
@@ -1586,6 +1927,7 @@ export class Client {
     signal: AbortSignal | undefined,
     retried: boolean,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1613,21 +1955,24 @@ export class Client {
 
     // 401 单次重试
     if (resp.status === 401 && !retried) {
+      const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+      const authError = parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+      if (!isUserAccessTokenRejected(authError)) throw authError;
       try {
-        await resp.body?.cancel();
-      } catch {
-        /* ignore */
-      }
-      try {
-        await this.forceRefresh(signal);
+        await this.forceRefresh(signal, token);
       } catch (refreshErr) {
         throw new Error(
           `stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity);
+      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID);
       return;
     }
+
+    // 计费关联 (2026-09-01): 响应头在首字节之前就已到达, 这里是唯一能在
+    // 「流还没吐任何事件」之前拿到消费请求 ID 的位置。刻意放在 !resp.ok 之前 ——
+    // HTTP 错误同样有关联价值, 且错误体里未必带这个 ID。
+    notifyGatewayRequestID(onGatewayRequestID, resp.headers);
 
     if (!resp.ok) {
       const bodyBytes = await readLimited(resp.body!, maxErrorBodySize);
@@ -1674,6 +2019,7 @@ export class Client {
     signal: AbortSignal | undefined,
     retried: boolean,
     onUpstreamActivity?: UpstreamActivityCallback,
+    onGatewayRequestID?: GatewayRequestIDCallback,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1700,21 +2046,24 @@ export class Client {
     }
 
     if (resp.status === 401 && !retried) {
+      const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+      const authError = parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+      if (!isUserAccessTokenRejected(authError)) throw authError;
       try {
-        await resp.body?.cancel();
-      } catch {
-        /* ignore */
-      }
-      try {
-        await this.forceRefresh(signal);
+        await this.forceRefresh(signal, token);
       } catch (refreshErr) {
         throw new Error(
           `messages stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity);
+      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID);
       return;
     }
+
+    // 计费关联 (2026-09-01): 响应头在首字节之前就已到达, 这里是唯一能在
+    // 「流还没吐任何事件」之前拿到消费请求 ID 的位置。刻意放在 !resp.ok 之前 ——
+    // HTTP 错误同样有关联价值, 且错误体里未必带这个 ID。
+    notifyGatewayRequestID(onGatewayRequestID, resp.headers);
 
     if (!resp.ok) {
       const bodyBytes = await readLimited(resp.body!, maxErrorBodySize);
@@ -1822,7 +2171,9 @@ export class Client {
     if (!base.endsWith('/api/v4')) {
       base += '/api/v4';
     }
-    return base + path;
+    const url = base + path;
+    this.assertCredentialURL(url);
+    return url;
   }
 
   /**
@@ -1836,7 +2187,15 @@ export class Client {
    */
   complianceURL(path: string): string {
     const base = this.complianceBaseURL ?? this.serverURL + '/admin-api';
-    return base + path;
+    const url = base + path;
+    this.assertCredentialURL(url);
+    return url;
+  }
+
+  private assertCredentialURL(url: string): void {
+    if (this.credentialMode !== 'legacy' && new URL(url).origin !== this.credentialAuthority) {
+      throw new Error('credential request authority changed');
+    }
   }
 
   /** GET/POST/... 通用 JSON 调用 (返回 result 已 typed) */
@@ -1888,13 +2247,11 @@ export class Client {
       );
 
       if (resp.status === 401 && !retried) {
+        const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+        const authError = parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+        if (!isUserAccessTokenRejected(authError)) throw authError;
         try {
-          await resp.body?.cancel();
-        } catch {
-          /* ignore */
-        }
-        try {
-          await this.forceRefresh(ctl.signal);
+          await this.forceRefresh(ctl.signal, token);
         } catch (refreshErr) {
           throw new Error(
             `unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
@@ -1983,13 +2340,11 @@ export class Client {
       );
 
       if (resp.status === 401 && !retried) {
+        const bodyBytes = resp.body ? await readLimited(resp.body, maxErrorBodySize) : new Uint8Array();
+        const authError = parseHTTPErrorWithHeader(resp.status, bodyBytes, resp.headers);
+        if (!isUserAccessTokenRejected(authError)) throw authError;
         try {
-          await resp.body?.cancel();
-        } catch {
-          /* ignore */
-        }
-        try {
-          await this.forceRefresh(ctl.signal);
+          await this.forceRefresh(ctl.signal, token);
         } catch (refreshErr) {
           throw new Error(
             `unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
@@ -2080,6 +2435,7 @@ export class Client {
    * 6 处原始 fetch() 全部走此 helper
    */
   async doRequest(req: { method: string; url: string; headers: Record<string, string>; body?: string }, signal?: AbortSignal): Promise<Response> {
+    if (new Headers(req.headers).has('Authorization')) this.assertCredentialURL(req.url);
     try {
       return await this.fetchImpl(req.url, {
         method: req.method,

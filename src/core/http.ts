@@ -4,7 +4,7 @@
 //
 // 这些函数在 Go 侧是 client.go 内部 unexported, 拆出独立文件以让 client.ts 不必再大。
 
-import { HTTPError, NetworkError, StreamError } from '../shared/errors';
+import { HTTPError, NetworkError, StreamError, type FaultDomain, type RequestDisposition } from '../shared/errors';
 
 // =============================================================================
 // 安全限制常量 (端口自 acosmi-sdk-go/client.go 安全限制常量)
@@ -77,7 +77,9 @@ export function parseHTTPErrorWithHeader(
         errorCode?: unknown;
         windowKind?: unknown;
         windowResetAt?: unknown;
-        windowOverridable?: unknown;
+      windowOverridable?: unknown;
+        errorContractVersion?: unknown; faultDomain?: unknown; requestDisposition?: unknown;
+        transportRequestId?: unknown; consumeRequestId?: unknown; providerRequestId?: unknown; retryable?: unknown;
       };
       const errObj = top.error;
       if (errObj && typeof errObj === 'object') {
@@ -91,11 +93,25 @@ export function parseHTTPErrorWithHeader(
       }
       // 窗口限额扩展 (任一形态): 顶层业务机器码 + 窗口字段。
       // windowKind 只收契约冻结档位, 未知档位不伪造进闭合联合 (原值仍在 body 原串)。
+      const contractSource = errObj && typeof errObj === 'object'
+        ? errObj as typeof top
+        : top;
       if (typeof top.errorCode === 'string') errorCode = top.errorCode;
+      else if (typeof contractSource.errorCode === 'string') errorCode = contractSource.errorCode;
       if (top.windowKind === 'FIVE_HOUR' || top.windowKind === 'WEEKLY') windowKind = top.windowKind;
       if (typeof top.windowResetAt === 'string') windowResetAt = top.windowResetAt;
       // [W1 2026-07-11 软限额] 可豁免性 (老网关不返回 → undefined, 客户端按硬等待处理)。
       if (typeof top.windowOverridable === 'boolean') windowOverridable = top.windowOverridable;
+      const disposition = contractSource.requestDisposition === 'not_accepted' || contractSource.requestDisposition === 'accepted' || contractSource.requestDisposition === 'unknown' ? contractSource.requestDisposition as RequestDisposition : undefined;
+      const domains = ['user_auth','caller_credentials','account_quota','account_permission','provider','gateway','transport','stream_ticket','protocol'];
+      return new HTTPError(statusCode, { type, message, retryAfter, body: bodyStr, errorCode, windowKind, windowResetAt, windowOverridable,
+        errorContractVersion: contractSource.errorContractVersion === 1 ? 1 : undefined,
+        faultDomain: typeof contractSource.faultDomain === 'string' && domains.includes(contractSource.faultDomain) ? contractSource.faultDomain as FaultDomain : undefined,
+        requestDisposition: disposition,
+        transportRequestId: typeof contractSource.transportRequestId === 'string' ? contractSource.transportRequestId : null,
+        consumeRequestId: typeof contractSource.consumeRequestId === 'string' ? contractSource.consumeRequestId : null,
+        providerRequestId: typeof contractSource.providerRequestId === 'string' ? contractSource.providerRequestId : null,
+        retryable: contractSource.retryable === true });
     }
   } catch {
     // 非 JSON, body 原样保留
@@ -178,6 +194,8 @@ export function parseStreamError(data: string): StreamError {
     error?: unknown;
     message?: string;
     retryable?: boolean;
+    errorContractVersion?: number; faultDomain?: FaultDomain; requestDisposition?: RequestDisposition;
+    transportRequestId?: string | null; consumeRequestId?: string | null; providerRequestId?: string | null;
   };
   try {
     payload = JSON.parse(data);
@@ -204,7 +222,11 @@ export function parseStreamError(data: string): StreamError {
     }
   }
 
-  return new StreamError({ code, stage, message, rawError, retryable });
+  return new StreamError({ code, stage, message, rawError, retryable,
+    errorContractVersion: payload.errorContractVersion,
+    faultDomain: payload.faultDomain, requestDisposition: payload.requestDisposition,
+    transportRequestId: payload.transportRequestId, consumeRequestId: payload.consumeRequestId,
+    providerRequestId: payload.providerRequestId });
 }
 
 // =============================================================================

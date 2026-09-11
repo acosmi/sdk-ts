@@ -8,6 +8,7 @@ export {
   Client,
   DEFAULT_API_TIMEOUT_MS,
   DEFAULT_GATEWAY_BASE_URL,
+  GATEWAY_REQUEST_ID_HEADER,
   ErrOAuthCORSBlocked,
   ErrRefreshProxyFailed,
   ErrTokenExpired,
@@ -17,6 +18,7 @@ export {
   type Config,
   type FilterStatus,
   type ReqTimeoutCtl,
+  type GatewayRequestIDCallback,
   type UpstreamActivityCallback,
 } from './client';
 export {
@@ -34,6 +36,19 @@ export {
 // === TokenStore ===
 export {
   type TokenStore,
+  type CredentialAuthorityConfig,
+  type CredentialCASExpected,
+  type CredentialCASResult,
+  type CredentialLoginAttempt,
+  type CredentialMutationReceipt,
+  type CredentialPrincipal,
+  type CredentialReason,
+  type CredentialRefreshOperation,
+  type CredentialRequestOwner,
+  type CredentialSnapshot,
+  type CredentialState,
+  type VerifiedCredentialIdentity,
+  type VersionedCredentialStore,
   FileTokenStore,
   LocalStorageTokenStore,
   InMemoryTokenStore,
@@ -54,3 +69,5 @@ export {
 
 // === Client × sanitize 胶水 — side-effect import 注入 applyRequestSanitizers 等到 Client.prototype ===
 import './sanitize-bridge';
+
+export type { CredentialStateNotification } from './credentials';

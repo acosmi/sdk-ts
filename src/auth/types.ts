@@ -8,6 +8,8 @@
 
 /** OAuth Authorization Server 元数据 (RFC 8414) */
 export interface ServerMetadata {
+  crabcode_auth_contract_version?: number;
+  gateway_error_contract_version?: number;
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
