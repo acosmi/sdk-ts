@@ -1,3 +1,9 @@
+## 2.19.2
+
+- Preserve catalog-supported low, medium, xhigh, and max thinking levels through both chat adapters.
+- Deliver explicit thinking-off requests to compatible OpenAI gateways.
+- Keep the credential and request-ID behavior shipped in 2.19.1.
+
 # Changelog
 
 All notable changes to `@acosmi/sdk-ts` will be documented in this file.
