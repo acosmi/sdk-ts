@@ -73,9 +73,12 @@ export class OpenAIAdapter implements ProviderAdapter {
     // Thinking / Effort → reasoning_effort
     // OpenAI 系只有顶层 `reasoning_effort: "low"|"medium"|"high"`, 无 thinking block;
     // 能接收到 reasoning_content (GLM/DeepSeek) 作为响应, 但请求侧只能控制级别。
-    const eff = resolveOpenAIReasoningEffort(req);
+    const eff = resolveOpenAIReasoningEffort(req, _caps.supports_max_effort);
     if (eff !== '') {
       body['reasoning_effort'] = eff;
+    }
+    if (_caps.supports_thinking && req.thinking?.level === ThinkingOff) {
+      body['thinking'] = { type: 'disabled' };
     }
 
     if (req.speed && req.speed !== '') {
@@ -179,26 +182,31 @@ export class OpenAIAdapter implements ProviderAdapter {
  * 把 Anthropic 心智模型的 thinking/effort 翻译成 OpenAI `reasoning_effort` 字段值
  * 返回空串表示不设置
  */
-export function resolveOpenAIReasoningEffort(req: ChatRequest): string {
+export function resolveOpenAIReasoningEffort(req: ChatRequest, supportsMax = false): string {
   // effort 优先级最高, 因为它本身就是通用级别语义
   if (req.effort && req.effort.level !== '') {
     switch (req.effort.level) {
       case 'low':
       case 'medium':
       case 'high':
+      case 'xhigh':
         return req.effort.level;
       case 'max':
         // OpenAI 无 max 级别, 等价最深 = high
-        return 'high';
+        return supportsMax ? 'max' : 'high';
     }
   }
   // thinking.level 次之
   if (req.thinking) {
     switch (req.thinking.level) {
+      case 'low':
+      case 'medium':
+      case 'xhigh':
+        return req.thinking.level;
       case ThinkingHigh:
         return 'high';
       case ThinkingMax:
-        return 'high';
+        return supportsMax ? 'max' : 'high';
       case ThinkingOff:
         return '';
     }
