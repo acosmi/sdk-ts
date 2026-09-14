@@ -1,3 +1,9 @@
+## 2.19.3
+
+- Surface gateway stream failures on the OpenAI line instead of crashing on them. The gateway emits its structured error frame with `event: failed`, but the OpenAI branch of `chatMessagesStream` captured the SSE event name and never read it, so the error frame reached the OpenAI chunk converter and died on `chunk.choices.length` - replacing the real upstream cause with an unrelated TypeError. That branch now routes `failed` and `error` frames through the existing `parseStreamError`, exactly as `chatStreamWithUsage` already did.
+- Guard the OpenAI stream converter against data frames that carry no `choices` (gateway error frames, usage-only tail frames from some compatible implementations), and mark `OpenAIStreamChunk.choices` optional - the type declared it required while the wire genuinely omits it, which is where the TypeError came from.
+- No behavior change on the Anthropic line, and no change to request building.
+
 ## 2.19.2
 
 - Preserve catalog-supported low, medium, xhigh, and max thinking levels through both chat adapters.
