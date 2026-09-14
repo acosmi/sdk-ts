@@ -55,7 +55,12 @@ export interface OpenAIStreamChunk {
   id: string;
   /** "chat.completion.chunk" */
   object: string;
-  choices: OpenAIStreamChoice[];
+  /**
+   * [W-QUAD-CHAIN-20260914] 可空。类型此前声明为必填, 但线上确实存在没有该字段的 data 帧
+   * (网关错误契约帧、部分兼容实现的 usage-only 尾帧) —— 「类型说它一定在、运行时它不在」
+   * 正是那句 `chunk.choices.length` TypeError 的来源。消费处必须先判 Array.isArray。
+   */
+  choices?: OpenAIStreamChoice[];
   usage?: OpenAIUsage;
 }
 

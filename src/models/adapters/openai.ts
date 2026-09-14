@@ -527,7 +527,11 @@ export class OpenAIStreamConverter {
     }
 
     const events: StreamEvent[] = [];
-    if (chunk.choices.length === 0) {
+    // [W-QUAD-CHAIN-20260914] 纵深防御: 同一条流里可能出现**没有 choices 的 data 帧**
+    // (网关错误契约帧、部分兼容实现的 usage-only 尾帧)。此前这里直接解引用,
+    // 任何这类帧都会变成一句与真因无关的 TypeError, 把诊断信息彻底摧毁。
+    // 正确的错误分流在 client.ts 的 SSE 事件名判断处; 这里只负责「不把自己炸掉」。
+    if (!Array.isArray(chunk.choices) || chunk.choices.length === 0) {
       return { events, done: false };
     }
     const choice = chunk.choices[0]!;

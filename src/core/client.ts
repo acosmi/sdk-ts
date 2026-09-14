@@ -2077,15 +2077,26 @@ export class Client {
     if (adapter.format() === ProviderFormat.OpenAI) {
       // OpenAI SSE: 转换为 Anthropic 兼容事件
       const converter = newOpenAIStreamConverter();
-      let _currentEvent = '';
+      let currentEvent = '';
       for await (const line of iterSSELines(resp.body)) {
         notifyUpstreamActivity(onUpstreamActivity);
         // v1.6.0: 显式跳过 SSE 注释行
         if (isSSECommentLine(line)) continue;
         if (line.startsWith('event:')) {
-          _currentEvent = line.slice('event:'.length).trim();
+          currentEvent = line.slice('event:'.length).trim();
         } else if (line.startsWith('data:')) {
           const data = line.slice('data:'.length).trim();
+          // [W-QUAD-CHAIN-20260914] 网关的结构化失败帧是**带 `event: failed` 发出**的
+          // (managed_model.go::writeManagedModelEvent)。此前这里的事件名只写不读
+          // (变量名的下划线前缀就是作者自己的承认), 于是错误帧被当成 OpenAI chunk
+          // 喂进 converter, 撞上 chunk.choices 未定义 —— 真实的上游错误
+          // (如 "tools[0].type: type cannot be empty") 被一句毫不相干的 TypeError 顶掉,
+          // 排障时看到的症状与真因之间没有任何联系。
+          // 判据与同文件 chatStreamWithUsage 的处理同源, 不另造第二套错误解析。
+          // 下面 Anthropic 分支的 currentEvent 一直是被消费的, 本分支此前是唯一的漏网者。
+          if (currentEvent === 'failed' || currentEvent === 'error') {
+            throw parseStreamError(data);
+          }
           const { events, done } = converter.convert(data);
           for (const ev of events) yield ev;
           if (done) return;
