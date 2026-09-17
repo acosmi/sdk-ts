@@ -16,7 +16,7 @@ import {
 } from '../types';
 import { BusinessError } from '../../shared/errors';
 import { buildBetas } from '../betas';
-import { ProviderFormat, type ProviderAdapter } from './index';
+import { ProviderFormat, type ProviderAdapter } from './format';
 
 /**
  * SDK 在 buildRequestBody 中写入并管理的请求体字段 (精确 body key)。

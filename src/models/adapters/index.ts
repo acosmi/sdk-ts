@@ -15,46 +15,14 @@
 // 红线 (双产品消费): AnthropicAdapter + OpenAIAdapter 等地位, 不可合并/降级
 // ============================================================================
 
-import type { ManagedModel, ChatRequest, ChatResponse, StreamEvent, ModelCapabilities } from '../types';
-
-/** 标识请求格式 */
-export enum ProviderFormat {
-  /** Anthropic 原生格式 */
-  Anthropic = 0,
-  /** OpenAI 兼容格式 */
-  OpenAI = 1,
-}
-
-/** 将 ChatRequest 转换为特定格式的 adapter 接口 */
-export interface ProviderAdapter {
-  /** 此 adapter 使用的请求格式 */
-  format(): ProviderFormat;
-
-  /**
-   * API 路径后缀
-   * Anthropic: "/anthropic", OpenAI: "/chat"
-   */
-  endpointSuffix(): string;
-
-  /**
-   * 将 ChatRequest 转换为 HTTP body (object → JSON.stringify)
-   * caps 用于条件化字段注入 (如 betas)
-   */
-  buildRequestBody(caps: ModelCapabilities, req: ChatRequest): Record<string, unknown>;
-
-  /** 解析同步响应 body 为 ChatResponse */
-  parseResponse(body: Uint8Array | string): ChatResponse;
-
-  /**
-   * 解析一行 SSE data 为 StreamEvent
-   * 返回 { event, done }; done=true 表示流结束 ([DONE] 或 message_stop)
-   */
-  parseStreamLine(eventType: string, data: string): { event: StreamEvent; done: boolean };
-}
-
-// 实现 import 在文件末尾, 避免循环依赖（adapter impl 也需引用 ProviderFormat）
+import type { ManagedModel } from '../types';
+// ProviderFormat / ProviderAdapter 定义在叶子模块 ./format; 适配器实现只从那里取,
+// 不回引本文件 (本文件顶层实例化适配器, 回引会让子路径入口在类定义前执行 new)。
+import type { ProviderAdapter } from './format';
 import { AnthropicAdapter } from './anthropic';
 import { OpenAIAdapter } from './openai';
+
+export { ProviderFormat, type ProviderAdapter } from './format';
 
 /** 按 provider 名称映射 adapter */
 const adapterRegistry: Record<string, ProviderAdapter> = {

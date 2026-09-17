@@ -5,17 +5,25 @@
 // 但 packed 产物在 consumer 视角 broken (exports 路径错位 / declare module
 // path 没 rewrite). prepublishOnly 内最后一道闸.
 //
+// 同时拦截 2.19.3 翻车模式: 类型检查全过, 但以子路径为入口 import 即抛错
+// (adapters/openai、adapters/anthropic 求值时撞上循环依赖里的顶层 new).
+// 只做 tsc 的闸门从不在运行期加载任何入口, 所以必须真的 import / require 一次.
+//
 // 流程:
 //   1. npm pack → acosmi-sdk-ts-<version>.tgz
 //   2. mkdtemp 临时 consumer 项目 (隔离的 node_modules)
 //   3. npm init -y + npm i <tgz> + npm i -D typescript
 //   4. 写 smoke.ts 用包名 import + 调 augmentation 添加的 method
 //   5. npx tsc --noEmit → 必须 0 退出码
+//   6. 从 package.json exports 读出每个声明了 import / require 条件的子路径,
+//      各起一个全新 node 进程, 用包名分别 ESM import() 与 CJS require();
+//      任一抛错即失败 (每个入口都是该进程加载的第一个模块)
 //
 // 跨平台:
 //   - 用 spawnSync 不用 exec/execSync (无 shell injection)
 //   - args 数组形式传入 (路径含空格不被分词)
 //   - npm bin 平台检测 (Windows: npm.cmd, Unix: npm)
+//   - 运行期加载直接 spawn process.execPath (node 本体, 不是 .cmd, 不经 shell)
 //   - mkdtempSync 走 os.tmpdir() (Windows %TEMP%, Unix /tmp)
 
 import { spawnSync } from 'node:child_process';
@@ -46,10 +54,57 @@ function run(cmd, args, cwd) {
   }
 }
 
+// exports 条件树里任一层出现 import / require 即为代码入口; 值只是字符串的子路径
+// (如 ./package.json) 没有条件, 自然跳过. 返回 [{ subpath, conditions }].
+function codeEntriesFromExports(exportsField) {
+  if (exportsField == null) {
+    throw new Error('package.json 没有 exports 字段');
+  }
+  // exports 语法糖 (字符串 / 数组 / 顶层即条件对象) 等价于 { ".": exports }
+  const isSubpathMap =
+    typeof exportsField === 'object' &&
+    !Array.isArray(exportsField) &&
+    Object.keys(exportsField).every((key) => key.startsWith('.'));
+  const subpaths = isSubpathMap ? exportsField : { '.': exportsField };
+
+  const entries = [];
+  for (const [subpath, target] of Object.entries(subpaths)) {
+    const conditions = new Set();
+    collectConditions(target, conditions);
+    if (conditions.size === 0) continue;
+    if (subpath.includes('*')) {
+      throw new Error(`exports 子路径 ${subpath} 是通配模式, 运行期加载无法确定具体入口`);
+    }
+    entries.push({ subpath, conditions });
+  }
+  if (entries.length === 0) {
+    throw new Error('exports 中没有任何声明了 import / require 条件的子路径');
+  }
+  return entries;
+}
+
+function collectConditions(target, found) {
+  if (Array.isArray(target)) {
+    for (const item of target) collectConditions(item, found);
+    return;
+  }
+  if (target === null || typeof target !== 'object') return;
+  for (const [condition, value] of Object.entries(target)) {
+    if (condition === 'import' || condition === 'require') found.add(condition);
+    collectConditions(value, found);
+  }
+}
+
+// 单个入口加载不应超过这个时长; 超时按失败处理, 不让闸门无限挂起
+const LOAD_TIMEOUT_MS = 60_000;
+
+const loaderSource = (loadExpression) =>
+  `try {\n  ${loadExpression};\n} catch (err) {\n  console.error(err && err.stack ? err.stack : String(err));\n  process.exit(1);\n}\n`;
+
 console.log(`[smoke-pack] pkg = ${pkgName}@${pkgVersion}`);
 
 // 1. npm pack
-console.log('[smoke-pack] step 1/5 — npm pack ...');
+console.log('[smoke-pack] step 1/6 — npm pack ...');
 run(npmBin, ['pack'], sdkRoot);
 // npm pack 命名规则: @scope/name → scope-name-<version>.tgz
 const tgzName = `${pkgName.replace(/^@/, '').replace('/', '-')}-${pkgVersion}.tgz`;
@@ -58,12 +113,12 @@ console.log(`[smoke-pack]   tarball = ${tgzPath}`);
 
 // 2. mkdtemp consumer
 const tmpDir = mkdtempSync(join(tmpdir(), 'sdk-ts-smoke-'));
-console.log(`[smoke-pack] step 2/5 — consumer dir = ${tmpDir}`);
+console.log(`[smoke-pack] step 2/6 — consumer dir = ${tmpDir}`);
 
 let exitCode = 0;
 try {
   // 3. npm init + install
-  console.log('[smoke-pack] step 3/5 — npm init + install tarball + typescript ...');
+  console.log('[smoke-pack] step 3/6 — npm init + install tarball + typescript ...');
   run(npmBin, ['init', '-y'], tmpDir);
   run(npmBin, ['i', tgzPath], tmpDir);
   run(npmBin, ['i', '-D', 'typescript'], tmpDir);
@@ -136,10 +191,45 @@ void _complianceInfo;
   writeFileSync(join(tmpDir, 'tsconfig.json'), JSON.stringify(tsconfig, null, 2));
 
   // 5. tsc --noEmit
-  console.log('[smoke-pack] step 4/5 — tsc --noEmit (consumer 视角验证) ...');
+  console.log('[smoke-pack] step 4/6 — tsc --noEmit (consumer 视角验证) ...');
   run(npxBin, ['tsc', '--noEmit'], tmpDir);
 
-  console.log('[smoke-pack] step 5/5 — ✓ PASS (consumer 视角 packed 产物可用)');
+  // 6. 运行期加载: 每个代码入口 × 声明了的条件, 各起一个全新 node 进程用包名加载
+  console.log('[smoke-pack] step 5/6 — node 运行期 import() / require() 每个 exports 代码入口 ...');
+  writeFileSync(join(tmpDir, 'load-import.mjs'), loaderSource('await import(process.argv[2])'));
+  writeFileSync(join(tmpDir, 'load-require.cjs'), loaderSource('require(process.argv[2])'));
+  const loaders = [
+    { condition: 'import', script: 'load-import.mjs' },
+    { condition: 'require', script: 'load-require.cjs' },
+  ];
+  const loadFailures = [];
+  for (const { subpath, conditions } of codeEntriesFromExports(pkgJson.exports)) {
+    const specifier = subpath === '.' ? pkgName : `${pkgName}/${subpath.slice(2)}`;
+    for (const { condition, script } of loaders) {
+      if (!conditions.has(condition)) continue;
+      const res = spawnSync(process.execPath, [script, specifier], {
+        cwd: tmpDir,
+        encoding: 'utf8',
+        timeout: LOAD_TIMEOUT_MS,
+      });
+      const label = `${condition.padEnd(7)} ${specifier}`;
+      if (!res.error && res.status === 0) {
+        console.log(`[smoke-pack]   ✓ ${label}`);
+        continue;
+      }
+      const outcome = res.error
+        ? String(res.error.message)
+        : `exit status ${res.status}${res.signal ? `, signal ${res.signal}` : ''}`;
+      const detail = [outcome, (res.stderr || '').trim()].filter(Boolean).join('\n');
+      console.error(`[smoke-pack]   ✗ ${label}\n${detail}`);
+      loadFailures.push(label);
+    }
+  }
+  if (loadFailures.length > 0) {
+    throw new Error(`运行期加载失败 ${loadFailures.length} 项: ${loadFailures.join('; ')}`);
+  }
+
+  console.log('[smoke-pack] step 6/6 — ✓ PASS (consumer 视角 packed 产物可用)');
 } catch (err) {
   console.error('[smoke-pack] ✗ FAILED');
   console.error(err.message);

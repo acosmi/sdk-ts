@@ -22,7 +22,7 @@ import {
   ThinkingOff,
 } from '../types';
 import { BusinessError } from '../../shared/errors';
-import { ProviderFormat, type ProviderAdapter } from './index';
+import { ProviderFormat, type ProviderAdapter } from './format';
 
 /** 实现 ProviderAdapter, 用于所有非 Anthropic 厂商 */
 export class OpenAIAdapter implements ProviderAdapter {
