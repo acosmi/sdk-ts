@@ -400,6 +400,12 @@ export interface WindowLimitStatus {
    * 开关正在放行。新网关恒下发, 老网关缺席 —— 缺席只说明网关没有这个字段, 不能当 false 读。
    */
   fiveHourSoftContinuing?: boolean;
+  /**
+   * [W-QUAD-CHAIN-20260914 D3-7] 窗口内在途预占 (微 Credits): 已被进行中的请求预扣、尚未结算的额度。
+   * `usedCredits` 只计已结算, 准入判定却按「已结算 + 在途」算 —— 本字段就是两者之差。
+   * 缺失 / null = 不知道 (老网关或取数失败), 不能当 0 读; 0 = 此刻没有在途。
+   */
+  inflightHeldCredits?: number | null;
 }
 
 /**
