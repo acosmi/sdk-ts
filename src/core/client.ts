@@ -2102,6 +2102,10 @@ export class Client {
           if (done) return;
         }
       }
+      // [W-QUAD-CHAIN-20260914] 走到这里 = 流在没有 `[DONE]` 的情况下结束 (EOF)。finish_reason 帧之后,
+      // 转换器可能还压着一次为等待 usage 尾帧而推迟的 message_delta + message_stop; 不在这里补发,
+      // 下游就永远收不到 message_stop。从未收到 finish_reason 的截断流, flush 不产出任何事件。
+      for (const ev of converter.flush()) yield ev;
     } else {
       // Anthropic SSE: 原生事件直透 + v0.11.0 content block 元数据回填
       const blockTypeMap = new Map<number, BlockMeta>();

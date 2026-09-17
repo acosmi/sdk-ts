@@ -61,7 +61,29 @@ export interface OpenAIStreamChunk {
    * 正是那句 `chunk.choices.length` TypeError 的来源。消费处必须先判 Array.isArray。
    */
   choices?: OpenAIStreamChoice[];
-  usage?: OpenAIUsage;
+  /**
+   * [W-QUAD-CHAIN-20260914] 可空。按 `stream_options.include_usage: true` 的帧序, 非尾帧上为
+   * null 或整个缺失, 带值的是 `[DONE]` 之前的尾帧 `{"choices":[],"usage":{...}}`;
+   * 转换器同样接受 usage 与 finish_reason 同帧的形态。形状见 {@link OpenAIStreamUsage}。
+   */
+  usage?: OpenAIStreamUsage | null;
+}
+
+/**
+ * 流式 chunk 上的 usage 对象。与同步响应的 {@link OpenAIUsage} 分开声明: 流式帧上各计数都可能
+ * 缺席, 线上还带明细对象; 沿用 OpenAIUsage 等于把「三个计数一定在」的承诺强加给流式帧。
+ *
+ * SDK 只把 `prompt_tokens` / `completion_tokens` 搬成 `input_tokens` / `output_tokens`,
+ * 与同步路径逐字相同。明细字段仅作类型声明: SDK 不映射、不做净额换算 —— usage 的语义归一只在网关。
+ */
+export interface OpenAIStreamUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  /** 上游输入明细 (如 `cached_tokens`); SDK 不读取 */
+  prompt_tokens_details?: { cached_tokens?: number };
+  /** 上游输出明细 (如 `reasoning_tokens`); SDK 不读取 */
+  completion_tokens_details?: { reasoning_tokens?: number };
 }
 
 export interface OpenAIStreamChoice {

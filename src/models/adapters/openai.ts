@@ -413,6 +413,42 @@ export function parseOpenAIResponseToAnthropic(raw: string | Uint8Array): Anthro
 // OpenAI SSE → Anthropic 事件转换器 (供 chatMessagesStreamInternal 使用)
 // ============================================================================
 
+/** 收尾 message_delta 上的 usage。只含与非流式路径相同的两个键; 缺席的键表示上游没给, 不是 0。 */
+interface StreamMessageUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+/**
+ * [W-QUAD-CHAIN-20260914] 读出一帧流式 chunk 上的 usage 对象, 搬成收尾 message_delta 的 usage 形态。
+ *
+ * 字段映射与同文件非流式路径 (`convertOpenAIToChatResponse` / `parseOpenAIResponseToAnthropic`)
+ * 逐字相同: 只搬 `prompt_tokens → input_tokens`、`completion_tokens → output_tokens`。
+ * `cached_tokens` / `reasoning_tokens` 等明细刻意不映射, 也不做 `prompt_tokens − cached` 之类的
+ * 净额换算 —— usage 的语义归一只住在网关, SDK 只做格式搬运。某个计数缺失或不是有限数时不写对应键。
+ *
+ * 帧上没有 usage 对象 (缺失 / null / 非对象) 返回 null: 调用方据此区分「这帧没带 usage」与
+ * 「带了 usage 但计数都缺席」(后者返回空对象, 仍算见过 usage)。
+ */
+function readStreamUsage(chunk: OpenAIStreamChunk): StreamMessageUsage | null {
+  const raw: unknown = chunk.usage;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const { prompt_tokens: promptTokens, completion_tokens: completionTokens } = raw as {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+  };
+  const usage: StreamMessageUsage = {};
+  if (typeof promptTokens === 'number' && Number.isFinite(promptTokens)) {
+    usage.input_tokens = promptTokens;
+  }
+  if (typeof completionTokens === 'number' && Number.isFinite(completionTokens)) {
+    usage.output_tokens = completionTokens;
+  }
+  return usage;
+}
+
 /**
  * 将 OpenAI SSE chunks 转换为 Anthropic 兼容的 StreamEvent
  * 有状态: 跨 chunk 追踪 block 索引
@@ -435,8 +471,18 @@ export class OpenAIStreamConverter {
   private toolArgsAccum = new Map<string | number, string>();
   /** 上一次解析出的 tool 键，供缺 index 且缺 id 的后续增量沿用。 */
   private lastToolKey: string | number | null = null;
-  /** 已发出 message_delta/message_stop，避免 finish_reason 与 `[DONE]` 各收一次。 */
+  /** 已发出 message_delta/message_stop，避免 finish_reason、usage 尾帧、`[DONE]` 与
+   *  {@link flush} 重复收口 —— 整条流恰好一个 message_stop。 */
   private messageClosed = false;
+  /** 已为仍打开的块发出 content_block_stop。与 {@link messageClosed} 分开记：块在
+   *  finish_reason 帧上就关，message_delta/message_stop 却可能推迟到之后的帧。 */
+  private blocksClosed = false;
+  /** [W-QUAD-CHAIN-20260914] finish_reason 已到、但 message_delta/message_stop 因等待
+   *  usage 尾帧而推迟时记下的 stop_reason；没有推迟中的收尾时为 null。 */
+  private pendingStopReason: string | null = null;
+  /** [W-QUAD-CHAIN-20260914] 最近一次带 usage 对象的帧搬出的 usage（后到覆盖先到）；
+   *  整条流从未出现 usage 对象时为 null，收尾 message_delta 据此不写 usage 键。 */
+  private usage: StreamMessageUsage | null = null;
 
   /**
    * 解析一条 tool_call delta 归属的块键。
@@ -463,15 +509,18 @@ export class OpenAIStreamConverter {
   }
 
   /**
-   * 关闭仍打开的 text / thinking / tool 块，并收口 message。
+   * 关闭仍打开的 text / thinking / tool 块（整条流只关一次）。
    *
    * 由 `finish_reason` 分支与 `[DONE]` 分支共用：上游断流或只发 `[DONE]` 而不发
    * `finish_reason` 时，此前一个 `content_block_stop` 都不会发，下游拿到的是一个
    * 永不闭合的 tool_use 块。
+   *
+   * [W-QUAD-CHAIN-20260914] 此前关块与 message_delta/message_stop 是同一个方法里同一时刻
+   * 的事；usage 尾帧要求收尾推迟，于是拆成本方法与 {@link emitMessageEnd} 两段，各自防重。
    */
-  private closeOpenBlocks(events: StreamEvent[], stopReason: string): void {
-    if (this.messageClosed) return;
-    this.messageClosed = true;
+  private closeContentBlocks(events: StreamEvent[]): void {
+    if (this.blocksClosed) return;
+    this.blocksClosed = true;
 
     if (this.textStarted) {
       events.push({
@@ -494,10 +543,29 @@ export class OpenAIStreamConverter {
         data: JSON.stringify({ type: 'content_block_stop', index: idx }),
       });
     }
-    events.push({
-      event: 'message_delta',
-      data: JSON.stringify({ type: 'message_delta', delta: { stop_reason: stopReason } }),
-    });
+  }
+
+  /**
+   * 发出 message_delta + message_stop，整条流只发一次；同时清掉推迟中的收尾。
+   *
+   * 见过 usage 对象就把它放进 message_delta：usage 必须出现在唯一的 message_stop 之前，
+   * message_stop 之后下游已无处安放用量。整条流从未出现 usage 对象时不写 usage 键 ——
+   * 缺席表示「上游没给」，不是 0。
+   */
+  private emitMessageEnd(events: StreamEvent[], stopReason: string): void {
+    if (this.messageClosed) return;
+    this.messageClosed = true;
+    this.pendingStopReason = null;
+
+    const messageDelta: {
+      type: 'message_delta';
+      delta: { stop_reason: string };
+      usage?: StreamMessageUsage;
+    } = { type: 'message_delta', delta: { stop_reason: stopReason } };
+    if (this.usage !== null) {
+      messageDelta.usage = this.usage;
+    }
+    events.push({ event: 'message_delta', data: JSON.stringify(messageDelta) });
     events.push({
       event: 'message_stop',
       data: JSON.stringify({ type: 'message_stop' }),
@@ -513,8 +581,13 @@ export class OpenAIStreamConverter {
       // 上游可能在 `[DONE]` 之前不发 finish_reason（部分兼容实现、以及被中断的
       // 流）。此前这里直接返回空事件，已打开的块永不闭合，下游只能靠超时收场。
       const events: StreamEvent[] = [];
-      if (this.messageStarted) {
-        this.closeOpenBlocks(events, 'end_turn');
+      if (this.pendingStopReason !== null) {
+        // [W-QUAD-CHAIN-20260914] finish_reason 已到而 usage 尾帧始终没来：流已声明结束，
+        // 推迟的收尾不能再等（块已在 finish_reason 帧上关过）。
+        this.emitMessageEnd(events, this.pendingStopReason);
+      } else if (this.messageStarted) {
+        this.closeContentBlocks(events);
+        this.emitMessageEnd(events, 'end_turn');
       }
       return { events, done: true };
     }
@@ -527,11 +600,22 @@ export class OpenAIStreamConverter {
     }
 
     const events: StreamEvent[] = [];
+    // [W-QUAD-CHAIN-20260914] usage 必须在「没有 choices 就返回」之前读: include_usage 的尾帧
+    // 恰恰是 `{"choices":[],"usage":{...}}`。此前先判 choices 再返回, 尾帧整帧丢弃,
+    // OpenAI 线每个回合的 usage 恒为 0。
+    const frameUsage = readStreamUsage(chunk);
+    if (frameUsage !== null) {
+      this.usage = frameUsage; // 后到覆盖先到
+    }
+
     // [W-QUAD-CHAIN-20260914] 纵深防御: 同一条流里可能出现**没有 choices 的 data 帧**
-    // (网关错误契约帧、部分兼容实现的 usage-only 尾帧)。此前这里直接解引用,
-    // 任何这类帧都会变成一句与真因无关的 TypeError, 把诊断信息彻底摧毁。
-    // 正确的错误分流在 client.ts 的 SSE 事件名判断处; 这里只负责「不把自己炸掉」。
+    // (网关错误契约帧、usage 尾帧)。此前这里直接解引用, 任何这类帧都会变成一句与真因无关的
+    // TypeError, 把诊断信息彻底摧毁。正确的错误分流在 client.ts 的 SSE 事件名判断处; 这里
+    // 只负责「不把自己炸掉」, 以及 usage 尾帧到达时补发推迟中的收尾。不带 usage 的这类帧零事件。
     if (!Array.isArray(chunk.choices) || chunk.choices.length === 0) {
+      if (frameUsage !== null && this.pendingStopReason !== null) {
+        this.emitMessageEnd(events, this.pendingStopReason);
+      }
       return { events, done: false };
     }
     const choice = chunk.choices[0]!;
@@ -680,7 +764,7 @@ export class OpenAIStreamConverter {
       }
     }
 
-    // finish_reason: 关闭所有 block + message_delta + message_stop
+    // finish_reason: 关闭所有 block; message_delta + message_stop 视 usage 是否已到, 立即发或推迟
     if (choice.finish_reason != null && choice.finish_reason !== '') {
       // stop_reason 映射。`content_filter` 等未列出的值刻意保持原样透传而不是压成
       // `end_turn` —— 把内容审查拦截伪装成正常结束会让下游无从分辨。同文件的
@@ -699,10 +783,43 @@ export class OpenAIStreamConverter {
         default:
           stopReason = choice.finish_reason;
       }
-      this.closeOpenBlocks(events, stopReason);
+      // 只认第一个 finish_reason: 收尾已发出或已推迟时, 后到的 finish_reason 不改写 stop_reason。
+      if (!this.messageClosed && this.pendingStopReason === null) {
+        this.closeContentBlocks(events);
+        if (this.usage !== null) {
+          // usage 已在本帧或更早的帧到达: 一次发出带 usage 的收尾
+          this.emitMessageEnd(events, stopReason);
+        } else {
+          // [W-QUAD-CHAIN-20260914] include_usage 的标准帧序里 finish_reason 帧先于 usage 尾帧。
+          // 此刻收尾, message_delta 只能不带 usage, 之后到的 usage 已无处安放 —— 于是推迟到
+          // usage 帧 / `[DONE]` / EOF (flush) 三者先到者。块照常在这一帧关闭。
+          this.pendingStopReason = stopReason;
+        }
+      }
+    }
+
+    // [W-QUAD-CHAIN-20260914] 推迟收尾期间到达的带 choices 帧若携带 usage, 同样立即补发。
+    if (frameUsage !== null && this.pendingStopReason !== null) {
+      this.emitMessageEnd(events, this.pendingStopReason);
     }
 
     return { events, done: false };
+  }
+
+  /**
+   * 流在**没有** `[DONE]` 的情况下结束 (EOF) 时, 由驱动方在读循环结束后调用一次。
+   *
+   * 只补发「finish_reason 已到、仅因等待 usage 尾帧而推迟」的 message_delta + message_stop。
+   * 从未收到 finish_reason 的流是被截断的流, 这里刻意**不**替它伪造正常结束 —— 一个
+   * `end_turn` 的 message_stop 会把被截断的回答当成完整回答交给下游。
+   * 已经收口 (usage 帧 / `[DONE]` / 上一次 flush) 后再调用返回空数组, 不会发出第二个 message_stop。
+   */
+  flush(): StreamEvent[] {
+    const events: StreamEvent[] = [];
+    if (this.pendingStopReason !== null) {
+      this.emitMessageEnd(events, this.pendingStopReason);
+    }
+    return events;
   }
 }
 

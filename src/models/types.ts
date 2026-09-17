@@ -395,6 +395,30 @@ export interface WindowLimitStatus {
    * 严格模式切换入口), 周窗恒 false。老网关不返回时缺失。
    */
   overridable?: boolean;
+  /**
+   * [W-QUAD-CHAIN-20260914] 网关 `quota_summary.go` 的服务端合成位: 该窗已用满, 但用户的「继续」
+   * 开关正在放行。新网关恒下发, 老网关缺席 —— 缺席只说明网关没有这个字段, 不能当 false 读。
+   */
+  fiveHourSoftContinuing?: boolean;
+}
+
+/**
+ * 订阅池视图 — QuotaSummary.subscriptionPool 的形状。
+ *
+ * 由网关 `quota_summary.go` 从 alive 的 COMMERCIAL (付费) 桶派生。quota / used / remaining 的
+ * 数值单位为**微 Credits** (÷1000 = Credits)。
+ */
+export interface QuotaSummarySubscriptionPool {
+  /** 池总额度 (微 Credits) */
+  quota: number;
+  /** 已用额度 (微 Credits) */
+  used: number;
+  /** 剩余额度 (微 Credits) */
+  remaining: number;
+  /** 到期时间; 网关未下发时缺失 */
+  expiresAt?: string;
+  /** 网关下发的单位标识 */
+  unit: string;
 }
 
 /**
@@ -422,6 +446,11 @@ export interface QuotaSummary {
    * 周配额; false=严格模式: 到达即等待恢复)。仅后端启用窗口限额时下发, 否则缺失。
    */
   windowFiveHourContinueEnabled?: boolean;
+  /**
+   * [W-QUAD-CHAIN-20260914] 订阅池: 网关由 alive 的 COMMERCIAL (付费) 桶派生, 数值单位为微 Credits
+   * (÷1000 = Credits)。缺席 = 老网关, 或当前没有 alive 付费桶 —— 两种都不可当 0 处理。
+   */
+  subscriptionPool?: QuotaSummarySubscriptionPool;
 }
 
 // =============================================================================

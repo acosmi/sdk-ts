@@ -150,7 +150,9 @@ it('转换器纵深防御: 没有 choices 的 data 帧返回零事件而不是�
   expect(() => converter.convert(GATEWAY_FAILED_FRAME)).not.toThrow();
   expect(converter.convert(GATEWAY_FAILED_FRAME).events.length).toBe(0);
 
-  // 形态二: 有 choices 但为空数组 (OpenAI include_usage 的尾帧), 改前就已正确处理, 作对照
+  // 形态二: 有 choices 但为空数组 (OpenAI include_usage 的尾帧), 作对照。这里零事件是因为没有
+  // 推迟中的收尾 (从未收到 finish_reason); usage 本身被记下而非丢弃, 它随收尾 message_delta
+  // 送达的断言见 openai-line-stream-usage.test.ts。
   const usageOnly = JSON.stringify({
     id: 'c1',
     object: 'chat.completion.chunk',

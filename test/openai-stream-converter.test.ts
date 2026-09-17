@@ -28,6 +28,10 @@ function runChunks(chunks: string[]): ParsedEvent[] {
     const { events } = conv.convert(c);
     all.push(...events);
   }
+  // 喂完即流结束 (EOF), 与 client.ts 读循环结束处一致地调 flush: 自 2.19.4 起 finish_reason
+  // 之后的 message_delta/message_stop 推迟到 usage 尾帧 / [DONE] / EOF 三者先到者, 本文件的
+  // chunk 序列两者都不带, 不 flush 就等于在断言一条还没结束的流。
+  all.push(...conv.flush());
   return all.map((e) => ({
     event: e.event,
     payload: JSON.parse(e.data) as Record<string, unknown>,
