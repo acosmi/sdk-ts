@@ -333,3 +333,94 @@ describe('OpenAIStreamConverter — 上游不规范时不产出非法 JSON', () 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// [W-SDK-OPENAI-PARITY] 三份 SDK (TS / Go / Rust) 共有缺陷中落在流式转换器上的两条。
+//
+// 这不是 parity 差异 —— 本轮实测三份实现在同一批形态上给出同一个错误答案, 因而必须一起修:
+// 单改一份就是制造新的分歧。真源 docs/audit/2026-09-17-SDK-OpenAI流式转换器与TS参照不一致-
+// 根因审计与实施方案.md §3.1 的 R-13 与 §5.5 的 PR-6。
+// ---------------------------------------------------------------------------
+
+/** 构造一个只声明「第 N 路还在」而不带 delta 的空心 choice 帧。 */
+function deltalessChunk(): string {
+  return JSON.stringify({ id: 'c1', choices: [{ index: 0 }] });
+}
+
+/** 同上, 但 delta 在场且为空对象 —— 用作「钉的是空 delta 语义」的对照。 */
+function emptyDeltaChunk(): string {
+  return JSON.stringify({ id: 'c1', choices: [{ index: 0, delta: {} }] });
+}
+
+describe('OpenAIStreamConverter — 共有缺陷: choice 缺 delta', () => {
+  it('缺 delta 的 choice 零事件通过, 不抛错、不终止流, 后续帧仍照常转换', () => {
+    // 载重断言。改坏 `choice.delta ?? {}` ⇒ 第一帧 TypeError 直接把本用例打红。
+    const events = runChunks([
+      deltalessChunk(),
+      textChunk('hello'),
+      finishChunk('stop'),
+      '[DONE]',
+    ]);
+
+    // 空心 choice 自身只贡献 message_start (首帧的固有产物), 不产任何 content 事件。
+    const names = events.map((e) => e.event);
+    expect(names.filter((n) => n === 'message_start')).toHaveLength(1);
+
+    // 后续帧不受影响: text 块完整开合, 流恰好一个 message_stop。
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    expect(startIndexByType.get('text')).toEqual([0]);
+    expect(names.filter((n) => n === 'message_stop')).toHaveLength(1);
+  });
+
+  it('对照: delta 在场但为空对象时同样零事件 (证明钉的是空 delta 语义, 不是「缺键」这一个字面形态)', () => {
+    const events = runChunks([emptyDeltaChunk(), textChunk('hi'), finishChunk('stop'), '[DONE]']);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    expect(startIndexByType.get('text')).toEqual([0]);
+    expect(events.filter((e) => e.event === 'message_start')).toHaveLength(1);
+  });
+});
+
+describe('OpenAIStreamConverter — 共有缺陷: text 先到、reasoning_content 后到', () => {
+  it('text → thinking: 两个块占不同 index, 各自成对开合', () => {
+    // 载重断言。修前 thinking 分支不关 text 块也不递增 blockIndex, 两个 content_block_start
+    // 都落在 index 0; closeContentBlocks 的 `textStarted / else if thinking` 只关得掉 text,
+    // thinking 块永不闭合。assertBlocksWellFormed 对这两件事各有一条断言。
+    const events = runChunks([
+      textChunk('ANSWER'),
+      thinkingChunk('THOUGHT'),
+      finishChunk('stop'),
+      '[DONE]',
+    ]);
+
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    expect(startIndexByType.get('text')).toEqual([0]);
+    expect(startIndexByType.get('thinking')).toEqual([1]);
+  });
+
+  it('text → thinking → text: 第二段正文另开第三个块, 不回填已关闭的 index', () => {
+    const events = runChunks([
+      textChunk('A'),
+      thinkingChunk('T'),
+      textChunk('B'),
+      finishChunk('stop'),
+      '[DONE]',
+    ]);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    expect(startIndexByType.get('text')).toEqual([0, 2]);
+    expect(startIndexByType.get('thinking')).toEqual([1]);
+  });
+
+  it('对照: thinking → text 这一侧的既有顺序不受影响', () => {
+    // 与上面两条同一个不变量的另一半。thinking 先到时 textStarted 恒为 false, 新增的
+    // 关块分支结构上取不到 —— 这条在篡改下仍绿, 证明新增断言钉的是 text 先到那一支。
+    const events = runChunks([
+      thinkingChunk('THOUGHT'),
+      textChunk('ANSWER'),
+      finishChunk('stop'),
+      '[DONE]',
+    ]);
+    const { startIndexByType } = assertBlocksWellFormed(events);
+    expect(startIndexByType.get('thinking')).toEqual([0]);
+    expect(startIndexByType.get('text')).toEqual([1]);
+  });
+});

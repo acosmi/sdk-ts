@@ -13,8 +13,20 @@ export interface OpenAIChatResponse {
   /** "chat.completion" */
   object: string;
   model: string;
-  choices: OpenAIChatChoice[];
-  usage: OpenAIUsage;
+  /**
+   * [W-SDK-OPENAI-PARITY] 可空。与下面的 {@link OpenAIChatResponse.usage} 和
+   * {@link OpenAIStreamChunk.choices} 是同一族「类型说它一定在、运行时它不在」——
+   * 消费处 `oai.choices.length` 抛的 TypeError 会把整条响应打死, 连 `id` / `model` /
+   * `usage` 这些确实到手的字段一起丢掉。缺席按空数组处理, 见 adapters/openai.ts。
+   */
+  choices?: OpenAIChatChoice[];
+  /**
+   * [W-SDK-OPENAI-PARITY] 可空。类型此前声明为必填, 但线上确实存在不带 usage 的同步响应
+   * (部分兼容实现不计量、网关裁剪过的响应)。与 {@link OpenAIStreamChunk.choices} 同一类
+   * 「类型说它一定在、运行时它不在」—— 消费处 `oai.usage.prompt_tokens` 抛的 TypeError
+   * 会把一个本可正常转换的响应整条打死。缺席时计数按 0, 见 adapters/openai.ts。
+   */
+  usage?: OpenAIUsage;
 }
 
 export interface OpenAIChatChoice {
@@ -88,7 +100,13 @@ export interface OpenAIStreamUsage {
 
 export interface OpenAIStreamChoice {
   index: number;
-  delta: OpenAIStreamDelta;
+  /**
+   * [W-SDK-OPENAI-PARITY] 可空。与 {@link OpenAIStreamChunk.choices} 同一类问题: 兼容实现会发
+   * `{"choices":[{"index":0}]}` 这种空心 choice。此前声明为必填, 消费处直接读
+   * `choice.delta.reasoning_content` ⇒ TypeError 撕开整条 for-await 链, 整个回合失败。
+   * 缺席按空 delta 处理 (零事件、不报错、不终止流), 见 adapters/openai.ts。
+   */
+  delta?: OpenAIStreamDelta;
   finish_reason: string | null;
 }
 

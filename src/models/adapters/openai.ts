@@ -10,7 +10,11 @@
 //   - 响应为 OpenAI choices 格式
 
 import { type AnthropicContentBlock, type AnthropicResponse } from '../wire-anthropic';
-import { type OpenAIChatResponse, type OpenAIStreamChunk } from '../wire-openai';
+import {
+  type OpenAIChatResponse,
+  type OpenAIStreamChunk,
+  type OpenAIStreamDelta,
+} from '../wire-openai';
 import {
   type ChatContentBlock,
   type ChatRequest,
@@ -253,9 +257,12 @@ function convertOpenAIToChatResponse(oai: OpenAIChatResponse): ChatResponse {
     role: 'assistant',
     content: [],
     stop_reason: '',
+    // [W-SDK-OPENAI-PARITY] 缺 usage 的响应按 0 计数, 而不是让 `oai.usage.prompt_tokens`
+    // 抛 TypeError 把整条响应打死 —— 上游不计量是常见形态, 正文照样是有效的。
+    // 与 Go 侧同名函数逐字同语义 (那里 Usage 是值类型, 缺席即零值)。
     usage: {
-      input_tokens: oai.usage.prompt_tokens,
-      output_tokens: oai.usage.completion_tokens,
+      input_tokens: oai.usage?.prompt_tokens ?? 0,
+      output_tokens: oai.usage?.completion_tokens ?? 0,
     },
     tokenRemaining: -1,
     callRemaining: -1,
@@ -263,7 +270,10 @@ function convertOpenAIToChatResponse(oai: OpenAIChatResponse): ChatResponse {
     modelTokenRemainingETU: -1,
   };
 
-  if (oai.choices.length > 0) {
+  // [W-SDK-OPENAI-PARITY] 缺 choices 的响应按空数组处理, 而不是让 `oai.choices.length`
+  // 抛 TypeError —— 那会连 id / model / usage 这些确实到手的字段一起丢掉。判据用
+  // Array.isArray 而不是 `?.length`, 与同文件流式路径的 choices 守卫取同一个表达式。
+  if (Array.isArray(oai.choices) && oai.choices.length > 0) {
     const choice = oai.choices[0]!;
 
     // finish_reason 映射
@@ -359,13 +369,17 @@ export function parseOpenAIResponseToAnthropic(raw: string | Uint8Array): Anthro
     content: [],
     model: oaiResp.model,
     stop_reason: '',
+    // [W-SDK-OPENAI-PARITY] 同 convertOpenAIToChatResponse: 缺 usage 按 0 计数, 不抛。
+    // 两处都要改 —— 只改一处等于「非流式路径修好了一半」, 而两条路径是同一族上游响应。
     usage: {
-      input_tokens: oaiResp.usage.prompt_tokens,
-      output_tokens: oaiResp.usage.completion_tokens,
+      input_tokens: oaiResp.usage?.prompt_tokens ?? 0,
+      output_tokens: oaiResp.usage?.completion_tokens ?? 0,
     },
   };
 
-  if (oaiResp.choices.length > 0) {
+  // [W-SDK-OPENAI-PARITY] 同 convertOpenAIToChatResponse: 缺 choices 按空数组处理, 不抛。
+  // 两处都要改 —— 只改一处等于「非流式路径修好了一半」, 而两条路径是同一族上游响应。
+  if (Array.isArray(oaiResp.choices) && oaiResp.choices.length > 0) {
     const choice = oaiResp.choices[0]!;
 
     switch (choice.finish_reason) {
@@ -619,6 +633,12 @@ export class OpenAIStreamConverter {
       return { events, done: false };
     }
     const choice = chunk.choices[0]!;
+    // [W-SDK-OPENAI-PARITY] 与上面的 choices 守卫同一档纵深防御: 兼容实现会发
+    // `{"choices":[{"index":0}]}` 这种空心 choice (只声明「第 0 路还在」而本帧无增量)。
+    // 此前三处直接读 `choice.delta.*`, 第一处就是 `reasoning_content` —— 一个 TypeError
+    // 撕开整条 for-await 链, 整个回合失败。缺席按空 delta 处理: 三个分支各自的空值判断
+    // 会让它零事件通过, finish_reason / usage 仍照常处理。
+    const delta: OpenAIStreamDelta = choice.delta ?? {};
 
     // 首个 chunk: 发送 message_start
     if (!this.messageStarted) {
@@ -637,8 +657,22 @@ export class OpenAIStreamConverter {
     }
 
     // thinking delta (reasoning_content)
-    if (choice.delta.reasoning_content && choice.delta.reasoning_content !== '') {
+    if (delta.reasoning_content && delta.reasoning_content !== '') {
       if (!this.thinkingStarted) {
+        // [W-SDK-OPENAI-PARITY] 关闭仍打开的 text 块 (镜像 text / tool_calls 两个分支)。
+        // chunk 顺序 content → reasoning_content 时, text 块仍开着且 blockIndex 未推进;
+        // 不在此关闭并递增, thinking 的 content_block_start 会与 text 撞同一个 index 0,
+        // 而 closeContentBlocks 的 `textStarted / else if thinking` 分支只关得掉其中一个 ——
+        // 另一个块永不闭合。三个分支必须两两互关, 才有「同一时刻至多一个非 tool 块打开」这条不变量。
+        if (this.textStarted) {
+          const stopJSON = JSON.stringify({
+            type: 'content_block_stop',
+            index: this.blockIndex,
+          });
+          events.push({ event: 'content_block_stop', data: stopJSON });
+          this.blockIndex++;
+          this.textStarted = false;
+        }
         this.thinkingStarted = true;
         this.thinkingBlockIndex = this.blockIndex; // 记下 thinking 占用的 index
         const blockJSON = JSON.stringify({
@@ -651,13 +685,13 @@ export class OpenAIStreamConverter {
       const deltaJSON = JSON.stringify({
         type: 'content_block_delta',
         index: this.thinkingBlockIndex,
-        delta: { type: 'thinking_delta', thinking: choice.delta.reasoning_content },
+        delta: { type: 'thinking_delta', thinking: delta.reasoning_content },
       });
       events.push({ event: 'content_block_delta', data: deltaJSON });
     }
 
     // text delta (content)
-    if (choice.delta.content && choice.delta.content !== '') {
+    if (delta.content && delta.content !== '') {
       // 关闭 thinking block (如果有) — 用 thinkingBlockIndex 关, 不用可能已推进的 blockIndex
       if (this.thinkingStarted && !this.thinkingStopped) {
         this.thinkingStopped = true;
@@ -680,13 +714,13 @@ export class OpenAIStreamConverter {
       const deltaJSON = JSON.stringify({
         type: 'content_block_delta',
         index: this.blockIndex,
-        delta: { type: 'text_delta', text: choice.delta.content },
+        delta: { type: 'text_delta', text: delta.content },
       });
       events.push({ event: 'content_block_delta', data: deltaJSON });
     }
 
     // tool_calls delta
-    for (const tc of choice.delta.tool_calls ?? []) {
+    for (const tc of delta.tool_calls ?? []) {
       // 上游给的 tool_call 未必带 `function`：OpenAI 流式规范允许后续增量只带
       // `{index}`。此前这里直接读 `tc.function.name` / `tc.function.arguments`，
       // 那种上游会抛 TypeError 撕开整条 for-await 链，整个回合失败。
