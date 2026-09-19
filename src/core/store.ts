@@ -245,8 +245,11 @@ export class FileTokenStore implements TokenStore {
         release = async () => {
           try {
             await fs.unlink(lockPath);
-          } catch {
-            // best-effort — 释放期间被 stale-break 删除是允许的
+          } catch (e) {
+            // best-effort — 释放期间被 stale-break 删除是允许的 (ENOENT, 不记)。
+            // 其余原因是真失败: 锁文件留在盘上, 下一个 acquire 要一直退避到 staleMs
+            // 才 break 得掉 —— 见 warnLockCleanupFailed。
+            warnLockCleanupFailed('release', lockPath, e);
           }
         };
         break;
@@ -279,8 +282,10 @@ export class FileTokenStore implements TokenStore {
           if (stale) {
             try {
               await fs.unlink(lockPath);
-            } catch {
-              // 别人先删了, 没关系
+            } catch (e) {
+              // 别人先删了 (ENOENT), 没关系, 不记; 其余原因说明这把陈旧锁**没被清掉**,
+              // 下一轮还会撞上同一个 stale 判定 —— 见 warnLockCleanupFailed。
+              warnLockCleanupFailed('stale-break', lockPath, e);
             }
             continue;
           }
@@ -400,6 +405,32 @@ export class FileTokenStore implements TokenStore {
       }
     });
   }
+}
+
+/**
+ * 锁文件清理失败的唯一日志点。
+ *
+ * `withLock` 的两个 unlink 调用点 (释放 / stale-break) 此前都是 `catch {}` —— 整段沉默。
+ * 失败的后果不是立刻报错, 而是锁文件留在盘上、下一次 acquire 一直退避到 `staleMs`
+ * (60 s) 才 break 得掉: 症状是「偶发卡 30~60 秒」, 而日志里一个字都没有。只读挂载 /
+ * 权限收紧 / 杀毒软件占用这类真实原因都以这种形状反复发生。
+ *
+ * **ENOENT 刻意不记**: 锁文件这一刻已经不在盘上, 正是两个调用点都明确允许的竞态
+ * (释放期间被 stale-break 删掉 / stale-break 时别人先删了)。恒响的 warn 等于没有 warn。
+ *
+ * 形态沿用 `client.ts` 的 `[acosmi-sdk] warning: ...` —— 本 SDK 没有日志注入面, 为这一条
+ * 新开一个就是新公开 API。**行为不变**: 本函数不抛, 两个调用点的控制流一字未改, `withLock`
+ * 仍然 fail-soft。
+ */
+function warnLockCleanupFailed(
+  stage: 'release' | 'stale-break',
+  lockPath: string,
+  e: unknown,
+): void {
+  if (isNotExistError(e)) return;
+  console.warn(
+    `[acosmi-sdk] warning: unlink token file lock (${stage}) failed: ${lockPath}: ${e instanceof Error ? e.message : String(e)}`,
+  );
 }
 
 function isNotExistError(e: unknown): boolean {
