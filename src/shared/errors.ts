@@ -188,11 +188,18 @@ export class NetworkError extends Error {
   }
 }
 
+/** 只收有限非负数; 其余 (null / 负数 / NaN / Infinity / 非数字) 一律 undefined。 */
+function finiteNonNegative(value: number | null | undefined): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 /**
  * 流式失败事件的结构化表示。
  *
- * 由 gateway 的 `managed_model_stream_failed` 事件解析得到。客户端可通过
- * instanceof 提取并按 code/retryable 决策。
+ * 由 gateway 的 `managed_model_stream_failed` 事件 (/chat 线 `event: failed`) 与
+ * Anthropic 线的 `event: error` 帧解析得到 —— 两条线同一张字段表, 同一个解析点
+ * (`core/http.ts::parseStreamError`)。客户端可通过 instanceof (同 realm) 或
+ * `isStreamError` (跨 realm) 提取, 并按 code/retryable 决策。
  */
 export class StreamError extends Error {
   /** 例: "empty_response" / "rate_limit" / "overloaded" / "" */
@@ -205,8 +212,23 @@ export class StreamError extends Error {
   userMessage: string;
   /** gateway 原始 error 字符串 */
   rawError: string;
-  /** 客户端是否值得重试 */
+  /** 客户端是否值得重试 (= 服务端 `retryable` **且** `requestDisposition === 'not_accepted'`) */
   retryable: boolean;
+  /**
+   * 服务端在帧上声明的 `retryable` **原值** (2.19.5 起) —— 不与 requestDisposition 合取,
+   * 缺席即 undefined。
+   *
+   * 为什么要并列存一份: 上面的 `retryable` 是两个判据的合取, 网关的流内错误帧并不总是
+   * 下发 `requestDisposition`, 于是"服务端明说可重试"会被合取成 false —— 两端各自正确,
+   * 合起来恒否。消费方要区分**「服务端明说不可重试」**(false, 一票否决) 与**「服务端没说」**
+   * (undefined, 回落到自己的本地分类表) 时, 只能读这个原值; 读 `retryable` 两种情形不可分。
+   */
+  serverRetryable?: boolean;
+  /**
+   * 服务端建议的等待秒数 (2.19.5 起)。**有限非负数**才收, 其余 (null / 负数 /
+   * NaN / Infinity / 非数字) 一律 undefined —— 宁可不给, 绝不编造等待时间。
+   */
+  retryAfterSecs?: number;
   errorContractVersion?: number;
   faultDomain?: FaultDomain;
   requestDisposition?: RequestDisposition;
@@ -214,7 +236,7 @@ export class StreamError extends Error {
   consumeRequestId?: string | null;
   providerRequestId?: string | null;
 
-  constructor(opts: { code?: string; stage?: string; message?: string; rawError?: string; retryable?: boolean; errorContractVersion?: number; faultDomain?: FaultDomain; requestDisposition?: RequestDisposition; transportRequestId?: string | null; consumeRequestId?: string | null; providerRequestId?: string | null } = {}) {
+  constructor(opts: { code?: string; stage?: string; message?: string; rawError?: string; retryable?: boolean; retryAfterSecs?: number | null; errorContractVersion?: number; faultDomain?: FaultDomain; requestDisposition?: RequestDisposition; transportRequestId?: string | null; consumeRequestId?: string | null; providerRequestId?: string | null } = {}) {
     const code = opts.code ?? '';
     const stage = opts.stage ?? '';
     const userMessage = opts.message ?? '';
@@ -231,6 +253,8 @@ export class StreamError extends Error {
     this.userMessage = userMessage;
     this.rawError = rawError;
     this.retryable = retryable;
+    this.serverRetryable = opts.retryable;
+    this.retryAfterSecs = finiteNonNegative(opts.retryAfterSecs);
     this.errorContractVersion = opts.errorContractVersion;
     this.faultDomain = opts.faultDomain;
     this.requestDisposition = opts.requestDisposition;
@@ -238,6 +262,23 @@ export class StreamError extends Error {
     this.consumeRequestId = opts.consumeRequestId;
     this.providerRequestId = opts.providerRequestId;
   }
+}
+
+/**
+ * StreamError 的**结构**判据 (2.19.5 起) —— 跨 realm 可用。
+ *
+ * 为什么不用 `instanceof`: 消费方 (如 CrabCode) 会在 worker / `vm` 上下文里消费这条错误,
+ * 或者把 SDK 打进第二份 bundle; 两种情形下 `instanceof StreamError` 都静默为 false ——
+ * 症状与"这段分类代码压根没写"逐字相同, 且不报错。
+ *
+ * 判据只认这条错误**自己**产生的两个不变量: `name === 'StreamError'` 与
+ * `errorCode` 是字符串 (构造函数恒赋值, 缺 code 时为 `''`)。`HTTPError` 也有可选的
+ * `errorCode`, 但 name 不同, 因此不会被误收。
+ */
+export function isStreamError(err: unknown): err is StreamError {
+  if (err == null || typeof err !== 'object') return false;
+  const e = err as { name?: unknown; errorCode?: unknown };
+  return e.name === 'StreamError' && typeof e.errorCode === 'string';
 }
 
 export type RequestDisposition = 'not_accepted' | 'accepted' | 'unknown';

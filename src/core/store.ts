@@ -210,7 +210,10 @@ export class FileTokenStore implements TokenStore {
   /**
    * 跨进程临界区. 用 sidecar `<path>.lock` 文件 + O_EXCL 创建语义实现互斥:
    *   - 创建成功 = 持有锁; 写入 pid+timestamp 便于诊断
-   *   - 创建失败 (EEXIST) = 别的进程持锁, backoff 重试
+   *   - 创建失败 (EEXIST) = 别的进程持锁, stale 检测后 backoff 重试
+   *   - 创建失败 (Windows 的 EPERM / EBUSY) = 前一持有者的 unlink 处于 delete-pending,
+   *     同属争用; 跳过 stale 检测直接 backoff 重试 (见 catch 内注释)。EACCES 不在其中 —
+   *     它是真权限错误, 立即抛
    *   - 锁文件 mtime > staleMs = 进程崩溃残留, unlink 后重试
    *   - acquireTimeoutMs 超时 = 抛错 (caller 应作为 transient error 处理, 上层 retry)
    *
@@ -248,23 +251,39 @@ export class FileTokenStore implements TokenStore {
         };
         break;
       } catch (e) {
-        if (!isAlreadyExistsError(e)) throw e;
-        // 锁被别的进程持有 — stale 检测
-        let stale = false;
-        try {
-          const st = await fs.stat(lockPath);
-          if (Date.now() - st.mtimeMs > fileLockDefaults.staleMs) stale = true;
-        } catch {
-          // 锁文件刚刚消失 → 立即重试 acquire
-          continue;
-        }
-        if (stale) {
+        if (!isLockContendedError(e)) throw e;
+        // Windows delete-pending 窗口 (2.19.5): 前一持有者刚 unlink, 文件已被标记删除但
+        // 最后一个句柄尚未关闭, 此刻 open(...,'wx') 返回的是 EPERM (实测; EBUSY 同机理)
+        // 而不是 EEXIST (NT 的 STATUS_DELETE_PENDING 被映射成 ERROR_ACCESS_DENIED)。
+        // 这是**争用**, 不是致命错误 —— 修前它走 `throw e`, 于是同一把锁上的正常交接被报成
+        // 永久失败。
+        //
+        // 这一档必须**跳过 stale 检测**: delete-pending 的文件 stat 要么直接失败、要么给出
+        // 前一持有者的旧 mtime, 两种都把"正在消失的锁"误判成"崩溃残留"; 而 stat 失败那条腿
+        // 是 `continue` (不过 acquireTimeoutMs 检查), 持续 EPERM 会变成不退出的忙循环。
+        // 退避重试仍受 acquireTimeoutMs 上界约束。
+        //
+        // EACCES **不收**: 它在 Windows 上更常见的产地是锁目录只读 / 被策略拒绝这类真权限
+        // 错误, 收进来等于把"立刻报 EACCES"拖成"30s 后报 acquire timeout"。非 Windows 平台
+        // 这两个码一律不收, 控制流与修前逐字节相同。
+        if (!isWindowsLockBusyError(e)) {
+          // 锁被别的进程持有 (EEXIST — 文件确实在那儿) — stale 检测
+          let stale = false;
           try {
-            await fs.unlink(lockPath);
+            const st = await fs.stat(lockPath);
+            if (Date.now() - st.mtimeMs > fileLockDefaults.staleMs) stale = true;
           } catch {
-            // 别人先删了, 没关系
+            // 锁文件刚刚消失 → 立即重试 acquire
+            continue;
           }
-          continue;
+          if (stale) {
+            try {
+              await fs.unlink(lockPath);
+            } catch {
+              // 别人先删了, 没关系
+            }
+            continue;
+          }
         }
         if (Date.now() - startMs > fileLockDefaults.acquireTimeoutMs) {
           throw new Error(
@@ -388,6 +407,33 @@ function isNotExistError(e: unknown): boolean {
     return (e as { code: unknown }).code === 'ENOENT';
   }
   return false;
+}
+
+/**
+ * Windows 上 open(...,'wx') 撞 delete-pending 时的表现 (2.19.5)。
+ *
+ * NT 内核在 `unlink` 之后、最后一个句柄关闭之前把文件置为 STATUS_DELETE_PENDING,
+ * 之后任何 open 都被拒; 本仓实测这一窗口下 libuv 给出的是 **EPERM**
+ * (`EPERM: operation not permitted, open '<path>.lock'`), EBUSY 作为同机理的
+ * 第二种表现一并收下 —— 恰恰**不是** EEXIST。判据只认 EEXIST 时, 同一把锁上的正常交接
+ * 会被当成致命错误抛出 (实测: 5 个并发 withLock 中有 store 直接失败)。
+ *
+ * **EACCES 刻意不收**: 它在 Windows 上更常见的产地是"锁目录只读 / 被策略拒绝"这类真
+ * 权限错误。收进来的代价是把一个立刻能看懂的失败 (open EACCES) 拖成 30 秒后一个看不懂的
+ * 失败 (acquire timeout); 配置错误必须立刻报。
+ *
+ * **只在 win32 上收**: POSIX 的 EPERM 是真权限错误, 同理不收。
+ */
+function isWindowsLockBusyError(e: unknown): boolean {
+  if (typeof process === 'undefined' || process.platform !== 'win32') return false;
+  if (typeof e !== 'object' || e === null || !('code' in e)) return false;
+  const code = (e as { code: unknown }).code;
+  return code === 'EPERM' || code === 'EBUSY';
+}
+
+/** 「锁被占住了, 该退避重试」的单一判据 = EEXIST ∪ (win32 的 delete-pending 两码)。 */
+function isLockContendedError(e: unknown): boolean {
+  return isAlreadyExistsError(e) || isWindowsLockBusyError(e);
 }
 
 function isAlreadyExistsError(e: unknown): boolean {

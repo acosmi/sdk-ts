@@ -179,13 +179,16 @@ export function classifyTransport(op: string, urlStr: string, err: unknown): Net
  * 兼容三种 schema (按优先级):
  *
  *  1. acosmi managed-model 协议 ("event: failed"):
- *     {errorCode, stage, error: <string>, message, retryable}
+ *     {errorCode, stage, error: <string>, message, retryable, retryAfterSecs}
  *
  *  2. Anthropic 协议扩展 ("event: error", v0.14.1 起):
- *     {type:"error", error:{type, message}, errorCode, retryable, message, stage}
+ *     {type:"error", error:{type, message}, errorCode, retryable, retryAfterSecs, message, stage}
  *
  *  3. Anthropic 标准纯净格式 (老网关 / 官方上游直返):
  *     {type:"error", error:{type, message}}
+ *
+ * `retryAfterSecs` (2.19.5 起) 两条线同表, 因此只有这一个解析点; 网关下发整数或 null,
+ * 非法值由 StreamError 构造函数统一判 undefined。
  */
 export function parseStreamError(data: string): StreamError {
   let payload: {
@@ -194,6 +197,7 @@ export function parseStreamError(data: string): StreamError {
     error?: unknown;
     message?: string;
     retryable?: boolean;
+    retryAfterSecs?: number | null;
     errorContractVersion?: number; faultDomain?: FaultDomain; requestDisposition?: RequestDisposition;
     transportRequestId?: string | null; consumeRequestId?: string | null; providerRequestId?: string | null;
   };
@@ -206,7 +210,9 @@ export function parseStreamError(data: string): StreamError {
   let code = payload.errorCode ?? '';
   const stage = payload.stage ?? '';
   let message = payload.message ?? '';
-  const retryable = payload.retryable ?? false;
+  // 刻意不写 `?? false`: 合取判据对 undefined 与 false 同答案, 但 StreamError 要把
+  // **服务端原值**存进 serverRetryable —— 提前抹平就再也分不出"服务端明说 false"与"没说"。
+  const retryable = payload.retryable;
   let rawError = '';
 
   if (payload.error != null) {
@@ -223,6 +229,7 @@ export function parseStreamError(data: string): StreamError {
   }
 
   return new StreamError({ code, stage, message, rawError, retryable,
+    retryAfterSecs: payload.retryAfterSecs,
     errorContractVersion: payload.errorContractVersion,
     faultDomain: payload.faultDomain, requestDisposition: payload.requestDisposition,
     transportRequestId: payload.transportRequestId, consumeRequestId: payload.consumeRequestId,

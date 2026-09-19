@@ -15,6 +15,7 @@ export {
   normalizeGatewayBaseURL,
   normalizeOverrideBaseURL,
   type BrowserRefreshMode,
+  type ChatStreamOptions,
   type Config,
   type FilterStatus,
   type ReqTimeoutCtl,

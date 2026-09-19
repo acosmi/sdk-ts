@@ -368,7 +368,7 @@ export const ErrRefreshProxyFailed = 'refresh_proxy_failed' as const;
 export const ErrTokenExpired = 'token_expired' as const;
 
 /**
- * v1.6.0: chat / chatMessages / chatStream / chatMessagesStream 的 per-request 超时上限。
+ * v1.6.0: **非流式** chat / chatMessages (及 generateVideo 等生成端点) 的 per-request 超时上限。
  *
  * 上游 (如 DeepSeek) 在开始推理前可能持续保活长达 10 分钟; SDK 必须容纳
  * "首字节前等待 + 推理 + 流式传输" 全程, 否则会在等待阶段误超时切断。
@@ -377,6 +377,12 @@ export const ErrTokenExpired = 'token_expired' as const;
  * 2026-08-06 导出: 供回归闸门按**符号**断言, 避免测试抄字面量后与本常量各自漂移
  * (抄件断言恒绿 = 零覆盖)。消费方若要自定义更短预算, 传 signal 即可 —
  * withRequestTimeout 取二者先到者, 无需读本值。
+ *
+ * ⚠️ 2.19.5 勘误: 本注释此前把 `chatStream` / `chatMessagesStream` 也列了进来, 但那两条
+ * 流式链路从来没有武装过这个预算 —— `chatStreamGen` / `chatMessagesStreamGen` 把调用方的
+ * `signal` 直接交给 fetch, 全程零 SDK 计时器 (这正是 `DEFAULT_API_TIMEOUT_MS` 注释里
+ * "流式 / 下载等长连接路径**不**套此超时"的那条规矩)。流式的总预算现在由调用方用
+ * {@link ChatStreamOptions.requestTimeoutMs} 显式声明; 不声明 = 不武装, 与 2.19.4 逐字一致。
  */
 export const CHAT_REQUEST_TIMEOUT_MS = 11 * 60 * 1000;
 
@@ -454,6 +460,82 @@ function notifyGatewayRequestID(
     cb(id);
   } catch {
     /* 旁路信号: 消费方的错误不传播回主链路 */
+  }
+}
+
+/**
+ * `chatStream` / `chatMessagesStream` 的可选项 (2.19.5 起)。
+ *
+ * 追加式: 作为两个方法的**末位**可选实参, 2.19.4 的调用方式一字不改仍然成立。
+ */
+export interface ChatStreamOptions {
+  /**
+   * 这一次流的**总时长**预算 (毫秒), 从开始迭代算到流结束。
+   *
+   * **缺席 / 非有限正数 = 不武装任何计时器**, 与 2.19.4 逐字一致 (流式链路历来只受
+   * 调用方 `signal` 约束, 见 {@link CHAT_REQUEST_TIMEOUT_MS} 的勘误段)。
+   *
+   * 什么时候该传: 消费方自己按活性判死 (见 {@link UpstreamActivityCallback}) 时,
+   * 这一条是**安全网**而不是主判据 —— 它的职责是给"看门狗本身坏掉"兜底, 因此应当显著
+   * 长于活性预算。拿它当主判据 = 用"活得太久"杀一个健康的长任务。
+   *
+   * 与 `signal` 是"先到者生效", 不覆盖调用方自己的取消。
+   */
+  requestTimeoutMs?: number;
+  /**
+   * 响应头回调 —— 在拿到响应之后、判断 `resp.ok` **之前**触发, 因此 HTTP 错误响应上同样
+   * 触发。位置与 `notifyGatewayRequestID` 逐行相同, 语义也相同 = **至多一次**: 触发了刷新
+   * 重试的那次 401 不算 (它在这一行之前就把控制权交给重试腿了), 真正开始流的那次响应算。
+   *
+   * 用途: 读网关随响应头下发的流控提示 (如 `X-Acosmi-Stream-Keepalive`, 秒) 来标定自己的
+   * 空闲预算 —— 那个数只在头里, 等到流内事件时已经晚了 (最需要它的恰恰是零事件的流)。
+   *
+   * 与其它两个流式回调同构: 旁路信号, 回调抛错被吞掉且不中断流。
+   */
+  onResponseHeaders?: (headers: Headers) => void;
+}
+
+/** 触发响应头回调; 消费方回调抛错不得污染主链路 (与 notifyGatewayRequestID 同构)。 */
+function notifyResponseHeaders(
+  cb: ((headers: Headers) => void) | undefined,
+  headers: Headers,
+): void {
+  if (!cb) return;
+  try {
+    cb(headers);
+  } catch {
+    /* 旁路信号: 消费方的错误不传播回主链路 */
+  }
+}
+
+/**
+ * 按 {@link ChatStreamOptions.requestTimeoutMs} 武装流式总预算; 缺席 / 非法一律返回
+ * undefined = 不武装 (调用方 signal 原样下传, 2.19.4 行为)。
+ *
+ * 刻意**不**在这里兜底成 CHAT_REQUEST_TIMEOUT_MS: 那会给历来无上限的流式链路凭空加一道
+ * 11 分钟墙钟, 健康长流会被它第一个杀掉。
+ */
+function armStreamRequestTimeout(
+  opts: ChatStreamOptions | undefined,
+  parent?: AbortSignal,
+): ReqTimeoutCtl | undefined {
+  const ms = opts?.requestTimeoutMs;
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return undefined;
+  return withRequestTimeout(ms, parent);
+}
+
+/**
+ * 把预算控制器的生命周期绑在流迭代器上: 正常结束、抛错、以及调用方 `break` 提前退出
+ * (generator 的 `.return()`) 三条路都会走到 finally 释放计时器。
+ */
+async function* disposeTimeoutWhenSettled(
+  inner: AsyncGenerator<StreamEvent, void, void>,
+  ctl: ReqTimeoutCtl,
+): AsyncGenerator<StreamEvent, void, void> {
+  try {
+    yield* inner;
+  } finally {
+    ctl.dispose();
   }
 }
 
@@ -1886,6 +1968,7 @@ export class Client {
    *
    * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
    * @param onGatewayRequestID 见 {@link GatewayRequestIDCallback}
+   * @param opts 见 {@link ChatStreamOptions} (2.19.5 起)
    */
   chatStream(
     modelID: string,
@@ -1893,10 +1976,19 @@ export class Client {
     signal?: AbortSignal,
     onUpstreamActivity?: UpstreamActivityCallback,
     onGatewayRequestID?: GatewayRequestIDCallback,
+    opts?: ChatStreamOptions,
   ): AsyncIterable<StreamEvent> {
     return {
-      [Symbol.asyncIterator]: () =>
-        this.chatStreamGen(modelID, req, signal, false, onUpstreamActivity, onGatewayRequestID),
+      [Symbol.asyncIterator]: () => {
+        // 预算武装在**开始迭代**的那一刻 (而不是方法调用那一刻), 与流的真实寿命对齐;
+        // 401 刷新重试腿继承 ctl.signal, 因此预算是整条链的总预算而不是每次尝试一份。
+        const ctl = armStreamRequestTimeout(opts, signal);
+        const inner = this.chatStreamGen(
+          modelID, req, ctl?.signal ?? signal, false,
+          onUpstreamActivity, onGatewayRequestID, opts?.onResponseHeaders,
+        );
+        return ctl ? disposeTimeoutWhenSettled(inner, ctl) : inner;
+      },
     };
   }
 
@@ -1907,6 +1999,7 @@ export class Client {
    *
    * @param onUpstreamActivity 见 {@link UpstreamActivityCallback}
    * @param onGatewayRequestID 见 {@link GatewayRequestIDCallback}
+   * @param opts 见 {@link ChatStreamOptions} (2.19.5 起)
    */
   chatMessagesStream(
     modelID: string,
@@ -1914,10 +2007,18 @@ export class Client {
     signal?: AbortSignal,
     onUpstreamActivity?: UpstreamActivityCallback,
     onGatewayRequestID?: GatewayRequestIDCallback,
+    opts?: ChatStreamOptions,
   ): AsyncIterable<StreamEvent> {
     return {
-      [Symbol.asyncIterator]: () =>
-        this.chatMessagesStreamGen(modelID, req, signal, false, onUpstreamActivity, onGatewayRequestID),
+      [Symbol.asyncIterator]: () => {
+        // 见 chatStream 同位置注释。
+        const ctl = armStreamRequestTimeout(opts, signal);
+        const inner = this.chatMessagesStreamGen(
+          modelID, req, ctl?.signal ?? signal, false,
+          onUpstreamActivity, onGatewayRequestID, opts?.onResponseHeaders,
+        );
+        return ctl ? disposeTimeoutWhenSettled(inner, ctl) : inner;
+      },
     };
   }
 
@@ -1928,6 +2029,7 @@ export class Client {
     retried: boolean,
     onUpstreamActivity?: UpstreamActivityCallback,
     onGatewayRequestID?: GatewayRequestIDCallback,
+    onResponseHeaders?: (headers: Headers) => void,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -1965,7 +2067,7 @@ export class Client {
           `stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID);
+      yield* this.chatStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID, onResponseHeaders);
       return;
     }
 
@@ -1973,6 +2075,10 @@ export class Client {
     // 「流还没吐任何事件」之前拿到消费请求 ID 的位置。刻意放在 !resp.ok 之前 ——
     // HTTP 错误同样有关联价值, 且错误体里未必带这个 ID。
     notifyGatewayRequestID(onGatewayRequestID, resp.headers);
+    // 同一位置的第二个旁路信号 (2.19.5): 整份响应头。网关的流控提示 (如
+    // X-Acosmi-Stream-Keepalive) 只存在于头里, 等流内事件已经晚了 —— 最需要它的
+    // 恰恰是一个事件都不来的流。刻意也排在 !resp.ok 之前: HTTP 错误响应上同样有值。
+    notifyResponseHeaders(onResponseHeaders, resp.headers);
 
     if (!resp.ok) {
       const bodyBytes = await readLimited(resp.body!, maxErrorBodySize);
@@ -2020,6 +2126,7 @@ export class Client {
     retried: boolean,
     onUpstreamActivity?: UpstreamActivityCallback,
     onGatewayRequestID?: GatewayRequestIDCallback,
+    onResponseHeaders?: (headers: Headers) => void,
   ): AsyncGenerator<StreamEvent, void, void> {
     // 浅拷贝避免原地 mutate 调用方传入的 req。
     const r: ChatRequest = { ...req, stream: true };
@@ -2056,7 +2163,7 @@ export class Client {
           `messages stream: unauthorized and refresh failed: ${refreshErr instanceof Error ? refreshErr.message : String(refreshErr)}`,
         );
       }
-      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID);
+      yield* this.chatMessagesStreamGen(modelID, req, signal, true, onUpstreamActivity, onGatewayRequestID, onResponseHeaders);
       return;
     }
 
@@ -2064,6 +2171,8 @@ export class Client {
     // 「流还没吐任何事件」之前拿到消费请求 ID 的位置。刻意放在 !resp.ok 之前 ——
     // HTTP 错误同样有关联价值, 且错误体里未必带这个 ID。
     notifyGatewayRequestID(onGatewayRequestID, resp.headers);
+    // 见 chatStreamGen 同位置注释 (2.19.5)。
+    notifyResponseHeaders(onResponseHeaders, resp.headers);
 
     if (!resp.ok) {
       const bodyBytes = await readLimited(resp.body!, maxErrorBodySize);

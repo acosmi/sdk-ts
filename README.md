@@ -358,6 +358,30 @@ const stream = client.chatMessagesStream(
 
 网关没下发（旧版本 / 非托管路径）时回调**一次都不触发**，SDK 绝不合成占位值；流照常出。浏览器端消费方还需网关 CORS `Access-Control-Expose-Headers` 放行该头（网关 v2026-09-01 起已放行）。
 
+### 流式可选项 `ChatStreamOptions`（v2.19.5+）
+
+`chatStream` / `chatMessagesStream` 的**末位**可选实参。两项都是追加语义，不传时行为与既往逐字一致。
+
+```ts
+const stream = client.chatMessagesStream(
+  modelId,
+  { messages, max_tokens: 4096 },
+  abortSignal,
+  onUpstreamActivity,
+  onGatewayRequestID,
+  {
+    requestTimeoutMs: 60 * 60 * 1000,        // ← 安全网，不是主判据
+    onResponseHeaders: h => {
+      const keepalive = h.get('X-Acosmi-Stream-Keepalive'); // 秒；缺失为 null
+      if (keepalive) armIdleWatchdog(Number(keepalive));
+    },
+  },
+);
+```
+
+- **`requestTimeoutMs`** —— 这一次流的**总时长**预算，从开始迭代算到流结束；与 `signal` 先到者生效，调用方 `break` 提前退出也会释放计时器。**缺席或非有限正数 = 不武装任何计时器**（流式链路历来只受调用方 `signal` 约束；`CHAT_REQUEST_TIMEOUT_MS` 只作用于非流式的 `chat` / `chatMessages`）。杀一条流的判据应当是**失去活性证据**（见上面的 `onUpstreamActivity`）而不是「活得太久」—— 这一条的职责只是给「看门狗本身坏掉」兜底，因此应当显著长于活性预算。
+- **`onResponseHeaders`** —— 在拿到响应之后、判断 `resp.ok` **之前**触发，因此 HTTP 错误响应上同样触发；401 刷新重试后由真正开始流的那次响应触发。网关的流控提示只存在于响应头里，等流内事件已经晚了，而最需要它的恰恰是一个事件都不来的流。与其它两个流式回调同构：旁路信号，回调抛错被吞掉且不中断流。
+
 ### Sources SSE 四态分类（v2.15+）
 
 `sources: []` 是检索成功但没有可展示引用的合法零结果，不是传输损坏。需要精确区分状态的新 consumer 使用加性接口 `classifySourcesEvent()`：
@@ -878,7 +902,7 @@ const view = await client.getBugReport(result.feedback_id);
 | -------------------- | ---------------------------------------------------------------------- |
 | `HTTPError`          | 4xx/5xx，含 `statusCode` / `body` / `type` / `retryAfter`              |
 | `NetworkError`       | TCP/DNS/TLS 失败；含 `isTimeout()` / `isEOF()` 便捷判定                  |
-| `StreamError`        | gateway `managed_model_stream_failed` 事件解析（含 `code` / `stage` / `retryable`） |
+| `StreamError`        | gateway `managed_model_stream_failed` 事件解析（含 `code` / `stage` / `retryable`；v2.19.5 起另带 `serverRetryable` = 帧上 `retryable` 原值、`retryAfterSecs` = 建议等待秒数，缺席均为 `undefined`。跨 realm 用 `isStreamError()` 判，别用 `instanceof`） |
 | `AgentRunStreamError` | Agent Runs 流返回 `error` 事件（默认抛出；可设 `throwOnError:false` 自行消费） |
 | `BusinessError`      | 网关返回 `code !== 0`，含 `code` (number) / `message` (字符串)         |
 | `RateLimitError`     | 429（含 `retryAfter`）                                                 |
@@ -1170,7 +1194,8 @@ npm run docs    # 经 TypeDoc 生成 API 参考到 docs/api/
 
 | 版本 | 状态 | 概要 |
 | --- | --- | --- |
-| 2.19.0 | **当前版本** | **网关消费请求 ID 透出（2026-09-01）**。网关把 `consumeRequestID`（即 `managed_model_usage_logs.request_id`）放进 `X-Acosmi-Request-Id` 响应头；加性导出 `GATEWAY_REQUEST_ID_HEADER` 与 `GatewayRequestIDCallback`，`chatMessagesStream` / `chatStream` 新增第 5 个可选实参、`chatMessages` / `chat` 新增第 4 个可选实参。响应头在首字节之前到达，因此覆盖流中段中断 / 零事件 / HTTP 错误全部形态。旧网关下回调零触发、绝不合成占位值，流照常出。不传回调时行为逐字节不变。 |
+| 2.19.5 | **当前版本** | **流内重试提示透出 + 流式可选项（2026-09-19）**。`StreamError` 加性新增 `serverRetryable`（帧上 `retryable` **原值**，不与 `requestDisposition` 合取 —— 合取会把「服务端明说可重试」与「服务端没说」压成同一个 `false`）与 `retryAfterSecs`（只收有限非负数，非法值一律 `undefined`）；加性导出结构判据 `isStreamError()`（worker / `vm` / 二次打包下 `instanceof` 静默为假）；`chatStream` / `chatMessagesStream` 新增**末位**可选实参 `ChatStreamOptions`（`requestTimeoutMs` 总时长安全网、`onResponseHeaders` 在 `resp.ok` 判断前交出响应头，用于读 `X-Acosmi-Stream-Keepalive` 等流控提示）。全部追加式；不传 `requestTimeoutMs` 时**不武装任何计时器**，流式链路行为与 2.19.4 逐字一致。 |
+| 2.19.0 | 稳定版 | **网关消费请求 ID 透出（2026-09-01）**。网关把 `consumeRequestID`（即 `managed_model_usage_logs.request_id`）放进 `X-Acosmi-Request-Id` 响应头；加性导出 `GATEWAY_REQUEST_ID_HEADER` 与 `GatewayRequestIDCallback`，`chatMessagesStream` / `chatStream` 新增第 5 个可选实参、`chatMessages` / `chat` 新增第 4 个可选实参。响应头在首字节之前到达，因此覆盖流中段中断 / 零事件 / HTTP 错误全部形态。旧网关下回调零触发、绝不合成占位值，流照常出。不传回调时行为逐字节不变。 |
 | 2.18.0 | 稳定版 | **`ManagedModel.thinking_levels` 类型面对齐（2026-08-29）**。加性新增可选字段 `thinking_levels?: string[]`：网关下发的升序思考档位 id 列表（`'off'`/`'high'`/`'max'` 的子集，按「admin 声明 ∩ wire 层真投递」派生）。`listModels` 原样透传，无归一化、无新方法、公开签名零变化。`[]` = 该模型无思考档；`undefined` = 旧网关未播报，调用方按"未知"处理，严禁按模型名推档。 |
 | 2.17.0 | 稳定版 | **桌面 loopback OAuth state 全路径闸 + 端口确定性关闭（2026-08-15）**。`/callback` 一切形态（成功 / OAuth error / 畸形）先验 `state` 且必须恰好一个并严格等值；缺失 / 重复（含重复的正确值）/ 错值一律 `state_mismatch` 拒绝且不再被误结算为 `auth_denied`；错误信息只描述形态，不回显 code / state / token / 完整 callback query。`finally` 补 `closeIdleConnections()`（Node 18 上 `close()` 不关残留 idle keep-alive）。用户真拒绝（OAuth error + 正确 state）语义保留为 `auth_denied`。公开 API 签名零变化。 |
 | 2.16.0 | 稳定版 | **chat 超时预算真正下传 + 流式活性回调（2026-08-06）**。`chat` / `chatMessagesAnthropic` / `chatMessagesOpenAI` / `generateVideo` 此前漏传 `doJSONFullRaw` 的第 5 实参，内层 **30 秒**默认值恒先于外层 11 分钟预算触发 —— v1.6.0 那次"调整为 11min"一天都没生效过（生产实证：单日 29 条 latency≈30 000 ms 的 499，横跨 4 厂商 5 模型，受害最重的是默认主循环模型）。加性导出 `CHAT_REQUEST_TIMEOUT_MS`；`chatStream` / `chatMessagesStream` 新增第 4 个可选实参 `onUpstreamActivity`，让被 `isSSECommentLine` 吞掉的保活注释行（以及 OpenAI 格式下零事件的 data 行）能抵达消费方的空闲看门狗。不传回调时行为逐字节不变。 |
