@@ -425,6 +425,28 @@ export interface QuotaSummarySubscriptionPool {
   expiresAt?: string;
   /** 网关下发的单位标识 */
   unit: string;
+  /**
+   * [W-RESET-CARD-WEEKLY-QUOTA-20260920 D-13] 池里由**加油包**贡献的剩余额度 (微 Credits)。
+   *
+   * 网关由 alive 的 COMMERCIAL 桶中 `sourceType === 'booster_pack'` 的那些行求和派生。
+   *
+   * **缺席 = 老网关, 或此刻一个加油包都没有 —— 两种都不可当 0 读。** 展示端的合同是
+   * 「三个 booster* 字段齐全才渲染副行」, 少一个就整条不画; 把缺席当 0 渲染, 等于在老网关上
+   * 向用户断言「你没有加油包」, 而真相是客户端不知道。
+   */
+  boosterRemaining?: number;
+  /**
+   * [W-RESET-CARD-WEEKLY-QUOTA-20260920 D-13] 上述 alive 加油包桶的**个数** (一行 = 一个加油包)。
+   * 缺席语义同 boosterRemaining。
+   */
+  boosterCount?: number;
+  /**
+   * [W-RESET-CARD-WEEKLY-QUOTA-20260920 D-13] 上述 alive 加油包中最早的到期时刻 (ISO-8601)。
+   *
+   * 缺席有第三种可能: 加油包确实存在、但全是永久桶 (不参与到期选举) —— 与 expiresAt 同口径。
+   * 所以它缺席时仍可能有 boosterRemaining / boosterCount, 展示端据此决定要不要说「最早 X 到期」。
+   */
+  boosterNextExpiresAt?: string;
 }
 
 /**

@@ -129,6 +129,7 @@ try {
   Client,
   classifyComplianceError,
   complianceScopes,
+  type QuotaSummarySubscriptionPool,
 } from '${pkgName}';
 
 declare const c: Client;
@@ -165,6 +166,17 @@ const _complianceScopes = complianceScopes();
 const _complianceInfo = classifyComplianceError(new BusinessError(1031000013, 'step up'));
 c.submitBugReport({});                // bug-report.ts
 c.applyRequestSanitizers({} as any);  // sanitize-bridge.ts
+// [W-RESET-CARD-WEEKLY-QUOTA-20260920 D-13] 订阅池的加油包三件套 —— 纯类型面加性字段。
+// 这里是它们**唯一**能被编译器钉住的地方: 源码 tsconfig 的 include 只有 src/ (test/ 被显式
+// exclude), 而 vitest 走 esbuild 只剥类型不做检查, 所以字段名写错一个字母时运行期断言照样全绿;
+// 只有 consumer 视角对 packed .d.ts 的这一跳会红。同时顺带证明三个字段真的进了产物。
+declare const _pool: QuotaSummarySubscriptionPool;
+const _boosterRemaining: number | undefined = _pool.boosterRemaining;
+const _boosterCount: number | undefined = _pool.boosterCount;
+const _boosterNextExpiresAt: string | undefined = _pool.boosterNextExpiresAt;
+void _boosterRemaining;
+void _boosterCount;
+void _boosterNextExpiresAt;
 // ws.ts: 仅验证类型存在 (实际调用涉及 WebSocket 真连接, smoke 不跑)
 const _wsConnect: typeof c.connect | undefined = undefined;
 const _wsIsConnected: typeof c.isConnected | undefined = undefined;

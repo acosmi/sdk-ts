@@ -1,3 +1,9 @@
+## 2.19.6
+
+- `QuotaSummarySubscriptionPool` 追加三个可选字段 `boosterRemaining?: number` / `boosterCount?: number` / `boosterNextExpiresAt?: string`，描述订阅池里由**加油包**贡献的那一部分：网关 `quota_summary.go` 在既有那一次 alive 遍历里，对 alive 的 COMMERCIAL 桶中 `sourceType === 'booster_pack'` 的行求和（`boosterRemaining`，单位同 `unit`，即**微 Credits**，÷1000 = Credits）、计数（`boosterCount`，一行 = 一个加油包）、并在这些 alive **限期**桶里选举最早到期时刻（`boosterNextExpiresAt`，ISO-8601）。加油包是「加总额度」的产品动作，与只清 5 小时 / 7 天窗口、对额度池零交互的**重置卡**是两笔账，展示端不得互相替代。
+- **三个字段的缺席语义**：缺席 = 老网关（扣费通还没在 `/api/entitlements/buckets` 上下发 `sourceType`），**或**此刻一个 alive 加油包都没有 —— 两种都**不可当 0 读**。网关一行都认不出时三个键一起不下发，绝不写 0；写 0 等于在老网关上向用户断言「你没有加油包」，而真相是客户端不知道。展示端的合同是「三个字段齐全才渲染副行」。`boosterNextExpiresAt` 另有第三种缺席可能：加油包确实存在、但全是永久桶（不参与到期选举，与 `expiresAt` 同口径），此时 `boosterRemaining` / `boosterCount` 仍在场。
+- **零破坏性变更**：纯类型面追加，无运行时代码改动。`getQuotaSummary` 历来原样透传网关响应体，2.19.5 的调用方式一字不改仍然成立。
+
 ## 2.19.5
 
 - `StreamError` 新增 `serverRetryable?: boolean` 与 `retryAfterSecs?: number`（追加字段，解析点仍只有 `parseStreamError` 一个，`/chat` 线 `event: failed` 与 `/anthropic` 线 `event: error` 同表）。`serverRetryable` 是帧上 `retryable` 的**原值**，不与 `requestDisposition` 合取：既有的 `retryable` 是两者的合取，而流内错误帧并不总下发 `requestDisposition`，于是「服务端明说可以重试」会被合取成 `false` —— 两端各自正确，合起来恒否，消费方分不出「服务端明说不可重试」（一票否决）与「服务端没说」（该回落到本地分类表）。`retryAfterSecs` 只收**有限非负数**，`null` / 负数 / NaN / Infinity / 非数字一律 `undefined`：宁可不给，绝不编造等待时间。两个字段缺席即 `undefined`，绝不补默认值；`retryable` 的合取语义一字未动。
