@@ -308,8 +308,25 @@ export interface ManagedModel {
   defaultToolIds?: string[];
   /** 该模型对当前用户档位是否被限制策略锁定 (limit_policy allowedModels 不含)。true=展示但置灰+升级引导。enforced 关/解析失败=false。 */
   locked?: boolean;
-  /** 是否属于"免费会员可用"分区 (FREE 档 allowedModels 内)。与当前用户档位无关 (仅分类)。 */
+  /**
+   * 是否属于"免费会员可用"分区 (PLAN:FREE 档 allowedModels 内)。与当前用户档位无关 (仅分类)。
+   *
+   * **语义不变, 但不再是展示分区的依据**: 订阅双池之后, 「哪些模型先扣精选免费池」由
+   * {@link ManagedModel.freePoolEligible} 表达, 与 FREE 档的 allowedModels 是两套独立的集合
+   * (两者可以不一致: 某模型可以 `freePoolEligible: true` 而 `freeTier: false`, 反之亦然)。
+   * 新代码不要再用本字段分区或打"精选"角标。字段保留只为老客户端零破坏 (方案 D-14)。
+   */
   freeTier?: boolean;
+  /**
+   * [订阅双池 P5 / D-14] 该模型当前是否有资格先扣**精选免费池 F** (池类 FREE, 或仍在限免期内的 PROMO_FREE)。
+   * 网关随 `effective-model-policy` 的 `freePoolModels` 投影下发, 与 {@link QuotaSummaryFreePool.eligibleModels}
+   * 同源。用于模型选择器的「精选」角标。
+   *
+   * **缺席 = 老网关 (还没有双池), 不是 `false`**: `true` = 有资格; `false` = 明确没有 (走付费池 P);
+   * `undefined` = 网关不知道这件事。展示端只在 `=== true` 时画角标, 绝不在 `!== false` 时画。
+   * 限免到期是随时间翻转的: 同一模型今天 `true`、截止后 `false`, 不要缓存跨过 `promo_until`。
+   */
+  freePoolEligible?: boolean;
 
   /**
    * 上游 gateway 为此模型启用的请求格式列表
@@ -450,9 +467,43 @@ export interface QuotaSummarySubscriptionPool {
 }
 
 /**
+ * 精选免费池视图 — QuotaSummary.freePool 的形状 (订阅双池 P5 / D-14, SDK 2.20.0 起)。
+ *
+ * 付费合同里随每个订阅周期一起发放的**精选免费池 F**: 只能被池类为 FREE / 限免中的 PROMO_FREE 的模型
+ * 先扣, 用完后同一请求自动溢出扣付费池 P ({@link QuotaSummarySubscriptionPool}, 语义不变)。
+ * quota / used / remaining 的单位与 subscriptionPool 一致, 为**微 Credits** (÷1000 = Credits)。
+ *
+ * **和 `freeTotalEtu` / `freeBuckets` 不是一回事**: 后者是 GENERIC (注册赠送 / 邀请奖励 / 试用)
+ * 桶合计, 与订阅合同无关; `freePool` 是付费合同自带的那一半额度。两者不可相加, 也不可互相替代。
+ */
+export interface QuotaSummaryFreePool {
+  /** 池总额度 (微 Credits) */
+  quota: number;
+  /** 已用额度 (微 Credits) */
+  used: number;
+  /** 剩余额度 (微 Credits) */
+  remaining: number;
+  /** 到期时间 (ISO-8601); 网关未下发时缺失, 口径同 {@link QuotaSummarySubscriptionPool.expiresAt} */
+  expiresAt?: string;
+  /** 恒为 `'MICRO_CREDIT'` */
+  unit: 'MICRO_CREDIT';
+  /**
+   * 当前有资格扣本池的模型 id 集合 = 池类 FREE ∪ 仍在限免期的 PROMO_FREE (如 `deepseek-flash`)。
+   * **可以是空数组**: `[]` = 网关明确说「此刻没有任何模型有资格」, 与字段缺席不是一回事。
+   */
+  eligibleModels: string[];
+}
+
+/** 计量口径: `OFFICIAL_CNY` = 1 Credit = ¥0.000001 官方价 (新合同); `COST_CNY` = 成本口径 (老合同)。 */
+export type QuotaSummaryCreditUnit = 'OFFICIAL_CNY' | 'COST_CNY';
+
+/**
  * GET /api/v4/entitlements/quota-summary 返回体, 调用 client.getQuotaSummary 获取.
  *
  * 设计目的: 个人中心钱包栏一次性展示"我还有多少免费 + 多少付费"+ 各自最近到期时间.
+ *
+ * 注意「免费」一词有两层含义: `freeTotalEtu` / `freeBuckets` 是 GENERIC 赠送桶 (与合同无关);
+ * 订阅合同自带的精选免费池是 {@link QuotaSummary.freePool}。
  */
 export interface QuotaSummary {
   /** GENERIC (免费/赠送) alive 桶 tokenRemaining 求和 */
@@ -479,6 +530,22 @@ export interface QuotaSummary {
    * (÷1000 = Credits)。缺席 = 老网关, 或当前没有 alive 付费桶 —— 两种都不可当 0 处理。
    */
   subscriptionPool?: QuotaSummarySubscriptionPool;
+  /**
+   * [订阅双池 P5 / D-14, 2.20.0] 精选免费池 F。`subscriptionPool` 的语义**不变**, 恒为付费池 P。
+   *
+   * **缺席 = 老合同 (没有 F), 或老网关 (还不认识 F) —— 两种都不可当 0 读**: 把缺席画成
+   * 「精选额度 0 / 已用满」是在向老合同用户断言一件不存在的事。展示端只在 `freePool !== undefined`
+   * 时画第二条进度条。
+   */
+  freePool?: QuotaSummaryFreePool;
+  /**
+   * [订阅双池 P5 / D-14, 2.20.0] 本响应里所有 Credit 数值的计量口径, 让客户端把 Credits 换算成 ¥ 时能标注口径。
+   * `OFFICIAL_CNY` = 新合同 (1 Credit = ¥0.000001 官方价); `COST_CNY` = 老合同 (成本口径)。
+   *
+   * **缺席 = 老网关, 不能当任一取值读**; 尤其不能默认成 `OFFICIAL_CNY` 去乘 ¥ 单价。
+   * 类型是闭集, 但网关将来新增口径时旧版 SDK 会原样透出未知字符串 —— 消费端对未知值应按「不换算」处理。
+   */
+  creditUnit?: QuotaSummaryCreditUnit;
 }
 
 // =============================================================================

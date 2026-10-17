@@ -1,3 +1,14 @@
+## 2.20.0
+
+- **订阅双池展示契约（追加式，方案 D-14）**：`QuotaSummary` 新增两个可选字段，`ManagedModel` 新增一个可选字段，全部**纯类型面追加**，运行时代码零改动 —— `getQuotaSummary` / `listModels` 历来原样透传网关响应体，2.19.6 的调用方式一字不改仍然成立。
+  - `QuotaSummary.freePool?: QuotaSummaryFreePool` —— 付费合同随每个订阅周期自带的**精选免费池 F**：`quota` / `used` / `remaining`（**微 Credits**，÷1000 = Credits）、可选 `expiresAt`、`unit: 'MICRO_CREDIT'`、`eligibleModels: string[]`（池类 FREE ∪ 仍在限免期的 PROMO_FREE 的 model id，可以是空数组）。F 只能被这些模型先扣，用完后同一请求自动溢出扣付费池 P。**`subscriptionPool` 语义不变，恒为付费池 P。**
+  - `QuotaSummary.creditUnit?: 'OFFICIAL_CNY' | 'COST_CNY'`（导出类型 `QuotaSummaryCreditUnit`）—— 本响应所有 Credit 数值的计量口径：`OFFICIAL_CNY` = 新合同（1 Credit = ¥0.000001 官方价），`COST_CNY` = 老合同（成本口径）。
+  - `ManagedModel.freePoolEligible?: boolean` —— 该模型此刻是否有资格先扣 F，用于模型选择器的「精选」角标；限免到期会随时间翻转。
+- **缺席语义（三个字段都适用，不可当 0 / false 读）**：`freePool` 缺席 = 老合同（没有 F）**或**老网关（不认识 F）；`creditUnit` 缺席 = 老网关，不能默认成任一取值，尤其不能默认成 `OFFICIAL_CNY` 去乘 ¥ 单价；`freePoolEligible` 缺席 = 老网关，只在 `=== true` 时画角标。把缺席画成「精选额度 0 / 已用满」是在向老合同用户断言一件不存在的事。
+- **`freeTier` 保留原语义、退出展示分区职责**：`ManagedModel.freeTier` 仍是「PLAN:FREE 档 allowedModels 内」这一静态分类，字段与取值一字未动（老客户端零破坏）；文档注释改为明示「哪些模型先扣精选免费池」由 `freePoolEligible` 表达，两套集合可以不一致，新代码不要再用 `freeTier` 分区或打角标。`QuotaSummary` 的注释同步澄清：`freeTotalEtu` / `freeBuckets` 是 GENERIC 赠送桶，**不是** `freePool`，两者不可相加。
+- 新增跨语言契约 fixture：`test/fixtures/quota-summary.{two-pool,legacy}.json`（`GET /api/v4/entitlements/quota-summary` 完整响应体，以网关 `buildQuotaSummary` 当前实际产出的全部字段为底）与 `test/fixtures/managed-models.{two-pool,legacy}.json`（目录条目 `freePoolEligible` 的 true / false / 缺席三态），配套 `test/quota-summary.two-pool.test.ts`。Go / Rust SDK 持有同字节的副本，Go 网关与 CrabCode 以它为准。
+- 文档：README 更新历史与「当前版本」行（此前停在 2.19.5）同步到 2.20.0。
+
 ## 2.19.6
 
 - `QuotaSummarySubscriptionPool` 追加三个可选字段 `boosterRemaining?: number` / `boosterCount?: number` / `boosterNextExpiresAt?: string`，描述订阅池里由**加油包**贡献的那一部分：网关 `quota_summary.go` 在既有那一次 alive 遍历里，对 alive 的 COMMERCIAL 桶中 `sourceType === 'booster_pack'` 的行求和（`boosterRemaining`，单位同 `unit`，即**微 Credits**，÷1000 = Credits）、计数（`boosterCount`，一行 = 一个加油包）、并在这些 alive **限期**桶里选举最早到期时刻（`boosterNextExpiresAt`，ISO-8601）。加油包是「加总额度」的产品动作，与只清 5 小时 / 7 天窗口、对额度池零交互的**重置卡**是两笔账，展示端不得互相替代。
