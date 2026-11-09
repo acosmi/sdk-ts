@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { CredentialLifecycle } from './credentials';
 import { Client } from './client';
 import type { VersionedCredentialStore } from './store';
@@ -16,7 +16,15 @@ const success = () =>
       expires_in: 3600,
     }),
   );
-function setup(store = new Memory(), fetcher = vi.fn(async () => success())) {
+const notCommitted = () =>
+  new Response(
+    JSON.stringify({ error: 'temporarily_unavailable', rotationOutcome: 'not_committed' }),
+    { status: 503 },
+  );
+function setup(
+  store: Memory = new Memory(),
+  fetcher = vi.fn(async (): Promise<Response> => success()),
+) {
   return {
     store,
     fetcher,
@@ -138,21 +146,109 @@ describe('durable credentials with fake tokens only', () => {
     expect(store.state.reason).toBe('refresh_outcome_unknown');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
-  it('known rollback preserves credentials but does not retry this call', async () => {
-    const { life, store, fetcher } = setup(
-      new Memory(),
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({ error: 'temporarily_unavailable', rotationOutcome: 'not_committed' }),
-            { status: 503 },
-          ),
-      ),
-    );
-    await expect(life.ensure()).rejects.toThrow();
+  it('known rollback keeps serving a still-live token and defers the next refresh', async () => {
+    const { life, store, fetcher } = setup(new Memory(), vi.fn(async () => notCommitted()));
+    await expect(life.ensure()).resolves.toBe('fake-access');
+    await expect(life.ensure()).resolves.toBe('fake-access');
     expect(store.state.credentialState).toBe('ready');
     expect(store.state.tokenSet?.refresh_token).toBe('fake-refresh');
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  describe('refusals that did not rotate the refresh token', () => {
+    afterEach(() => vi.useRealTimers());
+    const expired = () => {
+      const store = new Memory();
+      store.state.tokenSet!.expires_at = new Date(Date.now() - 1_000).toISOString();
+      return store;
+    };
+    it('fail without wiping and send no HTTP until the backoff elapses', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const fetcher = vi.fn(async () => notCommitted());
+      const { life, store } = setup(expired(), fetcher);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(store.state.credentialState).toBe('ready');
+      expect(store.state.tokenSet?.refresh_token).toBe('fake-refresh');
+      vi.setSystemTime(Date.now() + 4_900);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      // Second refusal doubles the wait to 10 s.
+      vi.setSystemTime(Date.now() + 200);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(Date.now() + 9_900);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      fetcher.mockImplementation(async () => success());
+      vi.setSystemTime(Date.now() + 200);
+      await expect(life.ensure()).resolves.toBe('winner-access');
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(store.state.tokenSet?.refresh_token).toBe('winner-refresh');
+    });
+    it.each([
+      ['the gateway business error body', JSON.stringify({ code: 429, message: 'slow down' })],
+      ['a non-JSON body', 'Too Many Requests'],
+    ])('a 429 with %s keeps the credentials and honors Retry-After', async (_, body) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const fetcher = vi.fn(
+        async () => new Response(body, { status: 429, headers: { 'Retry-After': '120' } }),
+      );
+      const { life, store } = setup(expired(), fetcher);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(store.state.credentialState).toBe('ready');
+      expect(store.state.reason).toBeNull();
+      expect(store.state.tokenSet?.refresh_token).toBe('fake-refresh');
+      vi.setSystemTime(Date.now() + 119_000);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 2_000);
+      await expect(life.ensure()).rejects.toThrow('refresh_temporarily_unavailable');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+    it('parallel callers share one refusal instead of each posting the refresh token', async () => {
+      const fetcher = vi.fn(async () => notCommitted());
+      const { life } = setup(expired(), fetcher);
+      const results = await Promise.allSettled([life.ensure(), life.ensure(), life.ensure()]);
+      for (const result of results) {
+        expect(result.status).toBe('rejected');
+        expect((result as PromiseRejectedResult).reason.message).toBe(
+          'refresh_temporarily_unavailable',
+        );
+      }
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+    it('a rejected access token is not served again while the refresh is deferred', async () => {
+      const fetcher = vi.fn(async () => notCommitted());
+      const { life } = setup(new Memory(), fetcher);
+      const rejected = await life.read();
+      await expect(life.ensure(undefined, rejected)).rejects.toThrow(
+        'refresh_temporarily_unavailable',
+      );
+      await expect(life.ensure(undefined, await life.read())).rejects.toThrow(
+        'refresh_temporarily_unavailable',
+      );
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+    it('a storage failure while restoring the refusal does not wipe the credentials', async () => {
+      class FailRestore extends Memory {
+        override async compareAndSwap(
+          ...args: Parameters<Memory['compareAndSwap']>
+        ): ReturnType<Memory['compareAndSwap']> {
+          if (
+            this.state.credentialState === 'refresh_dispatched' &&
+            args[1].credentialState === 'ready'
+          )
+            return { status: 'storage_error', error: 'disk_full' };
+          return super.compareAndSwap(...args);
+        }
+      }
+      const store = new FailRestore();
+      const { life } = setup(store, vi.fn(async () => notCommitted()));
+      await expect(life.ensure()).rejects.toThrow('storage_unavailable');
+      expect(store.state.tokenSet?.refresh_token).toBe('fake-refresh');
+      expect(store.state.reason).toBeNull();
+    });
   });
   it('retries saving exactly the same response', async () => {
     const a = setup();

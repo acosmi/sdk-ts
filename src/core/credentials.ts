@@ -18,6 +18,40 @@ const sameRequestOwner = (snapshot: CredentialSnapshot, expected: CredentialRequ
   snapshot.principal?.issuer === expected.principal?.issuer &&
   snapshot.principal?.subject === expected.principal?.subject &&
   snapshot.principal?.organizationId === expected.principal?.organizationId;
+
+/**
+ * Error message for a refresh the authority refused without rotating the refresh token. The
+ * stored credentials are intact; the same refresh token can be presented again later.
+ */
+const REFRESH_TEMPORARILY_UNAVAILABLE = 'refresh_temporarily_unavailable';
+/**
+ * Backoff after such a refusal, per refresh token and per lifecycle: 5 s, 10 s, 20 s, 40 s, then
+ * 60 s. Without it every caller that needs a token posts another refresh at once — during the
+ * 2026-11-09 database outage one desktop sent 708 refreshes in 137 minutes, 31 of them inside one
+ * minute, and the 32nd hit the token endpoint's rate limit.
+ */
+const REFRESH_RETRY_BASE_MS = 5_000;
+const REFRESH_RETRY_MAX_MS = 60_000;
+/** A server-sent `Retry-After` lengthens the wait up to this bound; it never shortens it. */
+const REFRESH_RETRY_AFTER_CAP_MS = 300_000;
+
+type RefreshOutcome =
+  | { kind: 'tokens'; tokens: TokenSet }
+  | { kind: 'not_committed'; retryAfterMs: number | null }
+  | {
+      kind: 'rejected';
+      state: 'reauth_required' | 'configuration_error';
+      reason: CredentialReason;
+    };
+
+function retryAfterMs(response: Response): number | null {
+  const raw = response.headers.get('retry-after');
+  if (!raw) return null;
+  const seconds = Number(raw);
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(raw) - Date.now();
+  if (!Number.isFinite(ms)) return null;
+  return Math.min(Math.max(ms, 0), REFRESH_RETRY_AFTER_CAP_MS);
+}
 export type CredentialStateNotification = Omit<CredentialSnapshot, 'tokenSet'>;
 export interface CredentialProtocol {
   metadata(signal?: AbortSignal): Promise<ServerMetadata>;
@@ -46,6 +80,8 @@ export class CredentialLifecycle {
   private listeners = new Set<(value: CredentialStateNotification) => void>();
   private notificationKey = '';
   private observations = new Map<string, CredentialSnapshot>();
+  /** Last refusal of a refresh token that was not rotated; see `REFRESH_RETRY_BASE_MS`. */
+  private refreshDeferral: { refreshToken: string; failures: number; until: number } | null = null;
   constructor(
     private store: VersionedCredentialStore,
     private protocol: CredentialProtocol,
@@ -267,6 +303,20 @@ export class CredentialLifecycle {
   private usable(s: CredentialSnapshot) {
     return !!s.tokenSet && Date.parse(s.tokenSet.expires_at) > Date.now() + 300_000;
   }
+  private refreshDeferred(s: CredentialSnapshot) {
+    const d = this.refreshDeferral;
+    return !!d && d.refreshToken === s.tokenSet?.refresh_token && Date.now() < d.until;
+  }
+  private deferRefresh(refreshToken: string, retryAfter: number | null) {
+    const failures =
+      this.refreshDeferral?.refreshToken === refreshToken ? this.refreshDeferral.failures + 1 : 1;
+    const backoff = Math.min(REFRESH_RETRY_MAX_MS, REFRESH_RETRY_BASE_MS * 2 ** (failures - 1));
+    this.refreshDeferral = {
+      refreshToken,
+      failures,
+      until: Date.now() + Math.max(backoff, retryAfter ?? 0),
+    };
+  }
   async bindIdentity(sessionId: string, signal?: AbortSignal): Promise<CredentialSnapshot> {
     const s = await this.ensureSnapshot(signal, undefined, true);
     if (s.authSessionId !== sessionId) throw new Error('superseded');
@@ -405,6 +455,10 @@ export class CredentialLifecycle {
       )
         return s;
       if (this.usable(s) && !rejected) return s;
+      if (this.refreshDeferred(s)) {
+        if (live && !rejected) return s;
+        throw new Error(REFRESH_TEMPORARILY_UNAVAILABLE);
+      }
       const metadata = await this.metadata(s, signal);
       abort(signal);
       const operationId = uuid();
@@ -428,7 +482,16 @@ export class CredentialLifecycle {
       if (r.status !== 'committed') continue;
       // The operation owns its lifecycle independently of all callers' waiting signals.
       const owner = this.refresh(r.snapshot, metadata);
-      await this.wait(owner, signal);
+      try {
+        await this.wait(owner, signal);
+      } catch (error) {
+        // The authority kept the refresh token: re-read, and a still-live access token that was
+        // not itself rejected keeps serving while the refresh is deferred.
+        const deferred =
+          error instanceof Error && error.message === REFRESH_TEMPORARILY_UNAVAILABLE;
+        if (rejected || !deferred) throw error;
+        continue;
+      }
       refreshed = true;
       rejected = undefined;
     }
@@ -469,63 +532,11 @@ export class CredentialLifecycle {
     const s = r.snapshot;
     const ctl = new AbortController();
     const timeout = setTimeout(() => ctl.abort(), 30_000);
-    let tokens: TokenSet;
+    let outcome: RefreshOutcome;
     try {
-      const result = await this.wait(
-        (async () => {
-          const response = await this.protocol.fetch(metadata.token_endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-              grant_type: 'refresh_token',
-              client_id: s.tokenSet!.client_id,
-              refresh_token: s.tokenSet!.refresh_token,
-            }),
-            signal: ctl.signal,
-          });
-          const body = await response.json();
-          return { response, body };
-        })(),
-        ctl.signal,
-      );
-      if (!result.response.ok) {
-        const code = result.body.error;
-        let reason: CredentialReason = 'refresh_outcome_unknown';
-        let state: CredentialSnapshot['credentialState'] = 'reauth_required';
-        if (code === 'invalid_grant') reason = code;
-        else if (['invalid_client', 'invalid_scope', 'unsupported_grant_type'].includes(code)) {
-          reason = code;
-          state = 'configuration_error';
-        } else if (
-          result.body.rotationOutcome === 'not_committed' &&
-          ['temporarily_unavailable', 'server_error'].includes(code)
-        ) {
-          await this.commit(s, {
-            credentialState: s.refreshOperation!.returnState,
-            refreshOperation: null,
-          });
-          throw new Error('refresh_temporarily_unavailable');
-        }
-        await this.commit(s, {
-          credentialState: state,
-          tokenSet: null,
-          refreshOperation: null,
-          reason,
-        });
-        throw new Error(reason);
-      }
-      const body = result.body as TokenResponse;
-      if (!Number.isFinite(body.expires_in) || body.expires_in <= 0)
-        throw new Error('invalid_response');
-      tokens = {
-        ...s.tokenSet!,
-        access_token: body.access_token,
-        refresh_token: body.refresh_token!,
-        expires_at: new Date(Date.now() + body.expires_in * 1000).toISOString(),
-        scope: body.scope ?? s.tokenSet!.scope,
-      };
-      this.validateTokens(tokens);
+      outcome = await this.wait(this.exchange(metadata, s.tokenSet!, ctl.signal), ctl.signal);
     } catch (error) {
+      // No answer, or an answer that cannot be read: the authority may have rotated the token.
       await this.commit(s, {
         credentialState: 'reauth_required',
         tokenSet: null,
@@ -536,6 +547,24 @@ export class CredentialLifecycle {
     } finally {
       clearTimeout(timeout);
     }
+    if (outcome.kind === 'not_committed') {
+      this.deferRefresh(s.tokenSet!.refresh_token, outcome.retryAfterMs);
+      await this.commit(s, {
+        credentialState: s.refreshOperation!.returnState,
+        refreshOperation: null,
+      });
+      throw new Error(REFRESH_TEMPORARILY_UNAVAILABLE);
+    }
+    if (outcome.kind === 'rejected') {
+      await this.commit(s, {
+        credentialState: outcome.state,
+        tokenSet: null,
+        refreshOperation: null,
+        reason: outcome.reason,
+      });
+      throw new Error(outcome.reason);
+    }
+    const tokens = outcome.tokens;
     const started = performance.now(),
       mutationId = uuid();
     for (;;) {
@@ -559,6 +588,7 @@ export class CredentialLifecycle {
         mutationId,
       );
       if (result.status === 'committed') {
+        this.refreshDeferral = null;
         await this.notify(result.snapshot);
         return;
       }
@@ -569,6 +599,55 @@ export class CredentialLifecycle {
       if (performance.now() - started >= 2000) throw new Error('credential_persist_failed');
       await pause();
     }
+  }
+  /**
+   * One refresh-token exchange. Settles with what the authority said; rejects only when there is
+   * no answer or the answer cannot be read, which leaves the rotation outcome unknown.
+   */
+  private async exchange(
+    metadata: ServerMetadata,
+    current: TokenSet,
+    signal: AbortSignal,
+  ): Promise<RefreshOutcome> {
+    const response = await this.protocol.fetch(metadata.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: current.client_id,
+        refresh_token: current.refresh_token,
+      }),
+      signal,
+    });
+    // A rate limiter answers before the grant is evaluated, whatever body shape it uses.
+    if (response.status === 429)
+      return { kind: 'not_committed', retryAfterMs: retryAfterMs(response) };
+    const body = await response.json();
+    if (!response.ok) {
+      const code = body.error;
+      if (code === 'invalid_grant')
+        return { kind: 'rejected', state: 'reauth_required', reason: code };
+      if (['invalid_client', 'invalid_scope', 'unsupported_grant_type'].includes(code))
+        return { kind: 'rejected', state: 'configuration_error', reason: code };
+      if (
+        body.rotationOutcome === 'not_committed' &&
+        ['temporarily_unavailable', 'server_error'].includes(code)
+      )
+        return { kind: 'not_committed', retryAfterMs: retryAfterMs(response) };
+      return { kind: 'rejected', state: 'reauth_required', reason: 'refresh_outcome_unknown' };
+    }
+    const tokenResponse = body as TokenResponse;
+    if (!Number.isFinite(tokenResponse.expires_in) || tokenResponse.expires_in <= 0)
+      throw new Error('invalid_response');
+    const tokens: TokenSet = {
+      ...current,
+      access_token: tokenResponse.access_token,
+      refresh_token: tokenResponse.refresh_token!,
+      expires_at: new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString(),
+      scope: tokenResponse.scope ?? current.scope,
+    };
+    this.validateTokens(tokens);
+    return { kind: 'tokens', tokens };
   }
   private async revoke(tokens: TokenSet, metadata?: ServerMetadata, authority?: CredentialSnapshot): Promise<'confirmed' | 'failed' | 'unsupported'> {
     const ctl = new AbortController();
